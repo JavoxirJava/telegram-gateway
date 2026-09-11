@@ -1,0 +1,24 @@
+# Go
+/bin/
+/dist/
+*.test
+*.out
+coverage.out
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Runtime data
+/data/
+/tmp/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# TDLib local state (never commit sessions)
+/tdlib-data/
+/tdlib-files/
