@@ -37,6 +37,7 @@ type Config struct {
 	FilesDirectory    string
 	DatabaseKey       []byte
 	UseTestDC         bool
+	Requests          RequestPolicy
 }
 
 // Authorization contains credentials only in QRLink, when requested explicitly
@@ -47,22 +48,23 @@ type Authorization struct {
 }
 
 type Session struct {
-	client   *tdjson.Client
-	config   Config
-	sink     tdjson.UpdateHandler
-	mu       sync.Mutex
-	auth     Authorization
-	changed  chan struct{}
-	authGate chan struct{}
-	closed   bool
+	client      *tdjson.Client
+	config      Config
+	sink        tdjson.UpdateHandler
+	mu          sync.Mutex
+	auth        Authorization
+	changed     chan struct{}
+	authGate    chan struct{}
+	closed      bool
+	requestGate chan struct{}
 }
 
 func New(engine *tdjson.Engine, cfg Config, sink tdjson.UpdateHandler) (*Session, error) {
-	if engine == nil || cfg.APIID <= 0 || cfg.APIID > 2147483647 || len(cfg.APIHash) != 32 || len(cfg.DatabaseKey) != 32 || cfg.DatabaseDirectory == "" || cfg.FilesDirectory == "" {
+	if engine == nil || cfg.Requests == nil || cfg.APIID <= 0 || cfg.APIID > 2147483647 || len(cfg.APIHash) != 32 || len(cfg.DatabaseKey) != 32 || cfg.DatabaseDirectory == "" || cfg.FilesDirectory == "" {
 		return nil, errors.New("TDLib configuration is incomplete or invalid")
 	}
-	s := &Session{config: cfg, sink: sink, changed: make(chan struct{}), authGate: make(chan struct{}, 1)}
-	client, err := engine.NewClient(s.onUpdate)
+	s := &Session{config: cfg, sink: sink, changed: make(chan struct{}), authGate: make(chan struct{}, 1), requestGate: make(chan struct{}, 1)}
+	client, err := engine.NewClient(s.onUpdate, cfg.Requests.After)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +194,7 @@ func (s *Session) authenticate(ctx context.Context, state, method string, fields
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	_, err := s.client.Call(requestCtx, method, fields)
+	_, err := s.governedCall(requestCtx, method, fields)
 	return err
 }
 func (s *Session) SubmitPhone(ctx context.Context, phone string) error {
@@ -248,7 +250,7 @@ func (s *Session) Read(ctx context.Context, method string, fields map[string]any
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	raw, err := s.client.Call(ctx, method, fields)
+	raw, err := s.governedCall(ctx, method, fields)
 	if err != nil {
 		return nil, fmt.Errorf("Telegram read: %w", err)
 	}

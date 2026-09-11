@@ -37,6 +37,11 @@ type Transport interface {
 // Durable consumers must commit before returning; an error stops the engine.
 type UpdateHandler func(context.Context, json.RawMessage) error
 
+// ErrorTransformer sees sanitized native errors even after the caller timed out.
+// It runs on the ordered client mailbox: do not call this client's Call method,
+// and bound any external I/O. It must preserve an error rather than swallow it.
+type ErrorTransformer func(context.Context, error) error
+
 type Engine struct {
 	transport Transport
 	ctx       context.Context
@@ -56,17 +61,18 @@ type response struct {
 }
 
 type Client struct {
-	engine       *Engine
-	id           int
-	handler      UpdateHandler
-	frames       chan json.RawMessage
-	done         chan struct{}
-	mu           sync.Mutex
-	closing      bool
-	closed       bool
-	nativeClosed bool
-	failure      error
-	pending      map[string]chan response
+	engine         *Engine
+	id             int
+	handler        UpdateHandler
+	errorTransform ErrorTransformer
+	frames         chan json.RawMessage
+	done           chan struct{}
+	mu             sync.Mutex
+	closing        bool
+	closed         bool
+	nativeClosed   bool
+	failure        error
+	pending        map[string]chan response
 }
 
 const maxPending = 64
@@ -87,7 +93,14 @@ func New(transport Transport) (*Engine, error) {
 	return e, nil
 }
 
-func (e *Engine) NewClient(handler UpdateHandler) (*Client, error) {
+func (e *Engine) NewClient(handler UpdateHandler, transforms ...ErrorTransformer) (*Client, error) {
+	if len(transforms) > 1 {
+		return nil, errors.New("only one native error transformer is supported")
+	}
+	var transform ErrorTransformer
+	if len(transforms) == 1 {
+		transform = transforms[0]
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closing || e.ctx.Err() != nil {
@@ -103,7 +116,7 @@ func (e *Engine) NewClient(handler UpdateHandler) (*Client, error) {
 	if _, ok := e.clients[id]; ok {
 		return nil, errors.New("TDLib reused an active client identifier")
 	}
-	c := &Client{engine: e, id: id, handler: handler, frames: make(chan json.RawMessage, 64), done: make(chan struct{}), pending: make(map[string]chan response)}
+	c := &Client{engine: e, id: id, handler: handler, errorTransform: transform, frames: make(chan json.RawMessage, 64), done: make(chan struct{}), pending: make(map[string]chan response)}
 	e.clients[id] = c
 	e.wg.Add(1)
 	go c.process()
@@ -197,12 +210,18 @@ func (c *Client) process() {
 					return
 				}
 			} else if h.Extra != "" {
+				responseErr := decodeError(raw)
+				if responseErr != nil && c.errorTransform != nil {
+					if mapped := c.errorTransform(c.engine.ctx, responseErr); mapped != nil {
+						responseErr = mapped
+					}
+				}
 				c.mu.Lock()
 				ch := c.pending[h.Extra]
 				delete(c.pending, h.Extra)
 				c.mu.Unlock()
 				if ch != nil {
-					ch <- response{body: raw, err: decodeError(raw)}
+					ch <- response{body: raw, err: responseErr}
 				}
 			}
 		}
@@ -210,8 +229,9 @@ func (c *Client) process() {
 }
 
 // Call copies request fields, so adding @extra cannot mutate the caller's map.
-// A cancelled call removes its waiter; late replies are ignored. Cancellation
-// does not undo a request already accepted by Telegram.
+// A cancelled call removes its waiter; late successes are ignored, but native
+// errors still reach the error transformer. Cancellation does not undo a request
+// already accepted by Telegram.
 func (c *Client) Call(ctx context.Context, method string, fields map[string]any) (json.RawMessage, error) {
 	if !allowed(method) {
 		return nil, ErrReadOnly

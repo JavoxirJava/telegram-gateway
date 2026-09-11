@@ -23,6 +23,8 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/config"
 	"github.com/JavoxirJava/telegram-gateway/internal/livepg"
 	"github.com/JavoxirJava/telegram-gateway/internal/postgres"
+	"github.com/JavoxirJava/telegram-gateway/internal/ratelimit"
+	"github.com/JavoxirJava/telegram-gateway/internal/redisstore"
 	sessionruntime "github.com/JavoxirJava/telegram-gateway/internal/runtime"
 	"github.com/JavoxirJava/telegram-gateway/internal/sessionkey"
 	"github.com/JavoxirJava/telegram-gateway/internal/tdjson"
@@ -84,6 +86,17 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 		return errors.New("cannot connect to agent database")
 	}
 	defer pool.Close()
+	redisCtx, cancelRedis := context.WithTimeout(ctx, 10*time.Second)
+	redisClient, err := redisstore.Open(redisCtx, cfg.Redis)
+	cancelRedis()
+	if err != nil {
+		return errors.New("cannot connect to native request governor")
+	}
+	defer redisClient.Close()
+	requests, err := tdlib.NewRedisPolicy(ratelimit.New(redisClient), accountID)
+	if err != nil {
+		return err
+	}
 	accountRepo := accounts.NewRepository(pool)
 	account, err := accountRepo.Get(ctx, accountID)
 	if err != nil {
@@ -184,7 +197,7 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 			}
 		}
 	})
-	session, err := tdlib.New(engine, tdlib.Config{APIID: int(cfg.Telegram.APIID), APIHash: cfg.Telegram.APIHash, DatabaseDirectory: workspace.DatabaseDir, FilesDirectory: workspace.FilesDir, DatabaseKey: workspace.DatabaseKey}, gate.Handle)
+	session, err := tdlib.New(engine, tdlib.Config{APIID: int(cfg.Telegram.APIID), APIHash: cfg.Telegram.APIHash, DatabaseDirectory: workspace.DatabaseDir, FilesDirectory: workspace.FilesDir, DatabaseKey: workspace.DatabaseKey, Requests: requests}, gate.Handle)
 	if err != nil {
 		return err
 	}

@@ -2,8 +2,14 @@ package tdlib
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/JavoxirJava/telegram-gateway/internal/telegram"
 )
 
 // ControlHandler must only be bound to a private Unix socket in a 0700
@@ -50,6 +56,23 @@ func ControlHandler(s *Session) http.Handler {
 			return
 		}
 		if err != nil {
+			var throttled *RequestThrottled
+			delay, flood := telegram.AsFloodWait(err)
+			if errors.As(err, &throttled) {
+				delay = throttled.After
+			}
+			if flood || throttled != nil {
+				if delay < time.Second {
+					delay = time.Second
+				}
+				w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(delay.Seconds()))))
+				reply(w, 429, map[string]string{"error": "authentication rate limited"})
+				return
+			}
+			if errors.Is(err, ErrBudgetUnavailable) {
+				reply(w, 503, map[string]string{"error": "authentication unavailable"})
+				return
+			}
 			reply(w, 400, map[string]string{"error": "authentication operation failed", "state": s.State().Type})
 			return
 		}

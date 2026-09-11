@@ -60,7 +60,7 @@ func newTestSession(t *testing.T) (*Session, *tdjsontest.Transport) {
 		defer cancel()
 		_ = e.Close(ctx)
 	})
-	s, err := New(e, Config{APIID: 123, APIHash: "0123456789abcdef0123456789abcdef", DatabaseDirectory: "/tmp/test/db", FilesDirectory: "/tmp/test/files", DatabaseKey: bytes.Repeat([]byte{2}, 32)}, nil)
+	s, err := New(e, Config{APIID: 123, APIHash: "0123456789abcdef0123456789abcdef", DatabaseDirectory: "/tmp/test/db", FilesDirectory: "/tmp/test/files", DatabaseKey: bytes.Repeat([]byte{2}, 32), Requests: permitPolicy{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

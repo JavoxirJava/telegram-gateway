@@ -30,3 +30,14 @@ func TestControlRejectsOriginAndUnknownFields(t *testing.T) {
 		}
 	}
 }
+
+func TestControlReturnsRateLimitWithoutEchoingCredentials(t *testing.T) {
+	s, _ := newTestSession(t)
+	s.config.Requests = &denyPolicy{}
+	r := httptest.NewRequest("POST", "/auth/phone", strings.NewReader(`{"value":"+998901234567"}`))
+	w := httptest.NewRecorder()
+	ControlHandler(s).ServeHTTP(w, r)
+	if w.Code != 429 || w.Header().Get("Retry-After") != "60" || strings.Contains(w.Body.String(), "998") {
+		t.Fatal(w.Code, w.Header(), w.Body.String())
+	}
+}
