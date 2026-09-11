@@ -12,23 +12,23 @@ import (
 )
 
 type Item struct {
-	ID               string
-	MessageID        string
-	AccountID        string
-	ChatID           string
-	MediaType        string
-	TelegramFileID   *int64
-	UniqueFileKey    *string
-	ObjectKey        *string
-	MIMEType         *string
-	FileName         *string
-	FileSize         *int64
-	SHA256           []byte
-	DownloadStatus   string
-	AttemptCount     int
-	LastAttemptAt    *time.Time
-	DownloadedAt     *time.Time
-	LastError        *string
+	ID             string
+	MessageID      string
+	AccountID      string
+	ChatID         string
+	MediaType      string
+	TelegramFileID *int64
+	UniqueFileKey  *string
+	ObjectKey      *string
+	MIMEType       *string
+	FileName       *string
+	FileSize       *int64
+	SHA256         []byte
+	DownloadStatus string
+	AttemptCount   int
+	LastAttemptAt  *time.Time
+	DownloadedAt   *time.Time
+	LastError      *string
 }
 
 type Repository struct {
