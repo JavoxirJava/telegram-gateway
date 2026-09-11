@@ -8,6 +8,7 @@ import (
 
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
 	"github.com/JavoxirJava/telegram-gateway/internal/audit"
+	"github.com/JavoxirJava/telegram-gateway/internal/messages"
 )
 
 func (s *Server) listChats(w http.ResponseWriter, r *http.Request) {
@@ -74,16 +75,34 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := s.messages.ListActiveByChat(r.Context(), principal.AccountID, chatID, nil, limit)
+	var cursor *messages.Cursor
+	if rawCursor := strings.TrimSpace(r.URL.Query().Get("cursor")); rawCursor != "" {
+		decoded, err := messages.DecodeCursor(rawCursor)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		cursor = &decoded
+	}
+
+	page, err := s.messages.ListActivePageByChat(r.Context(), principal.AccountID, chatID, cursor, limit)
 	if err != nil {
 		s.logger.Error("list messages failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list messages")
 		return
 	}
-	if !s.auditRead(w, r, principal, "API_MESSAGES_READ", "chat", chatID, map[string]any{"count": len(items)}) {
+	if !s.auditRead(w, r, principal, "API_MESSAGES_READ", "chat", chatID, map[string]any{
+		"count":       len(page.Items),
+		"has_more":    page.NextCursor != "",
+		"used_cursor": cursor != nil,
+	}) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": items, "count": len(items)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data":        page.Items,
+		"count":       len(page.Items),
+		"next_cursor": page.NextCursor,
+	})
 }
 
 func (s *Server) searchMessages(w http.ResponseWriter, r *http.Request) {
