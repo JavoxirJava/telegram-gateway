@@ -10,8 +10,10 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/accounts"
 	"github.com/JavoxirJava/telegram-gateway/internal/audit"
 	"github.com/JavoxirJava/telegram-gateway/internal/chats"
+	"github.com/JavoxirJava/telegram-gateway/internal/contacts"
 	"github.com/JavoxirJava/telegram-gateway/internal/health"
 	"github.com/JavoxirJava/telegram-gateway/internal/media"
+	"github.com/JavoxirJava/telegram-gateway/internal/members"
 	"github.com/JavoxirJava/telegram-gateway/internal/messages"
 	"github.com/JavoxirJava/telegram-gateway/internal/ratelimit"
 )
@@ -21,6 +23,8 @@ type Dependencies struct {
 	Accounts *accounts.Repository
 	Audit    *audit.Writer
 	Chats    *chats.Repository
+	Contacts *contacts.Repository
+	Members  *members.Repository
 	Messages *messages.Repository
 	Media    *media.Service
 	Limiter  *ratelimit.Limiter
@@ -33,6 +37,8 @@ type Server struct {
 	accounts *accounts.Repository
 	audit    *audit.Writer
 	chats    *chats.Repository
+	contacts *contacts.Repository
+	members  *members.Repository
 	messages *messages.Repository
 	media    *media.Service
 	limiter  *ratelimit.Limiter
@@ -46,6 +52,8 @@ func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) http.H
 		accounts: deps.Accounts,
 		audit:    deps.Audit,
 		chats:    deps.Chats,
+		contacts: deps.Contacts,
+		members:  deps.Members,
 		messages: deps.Messages,
 		media:    deps.Media,
 		limiter:  deps.Limiter,
@@ -60,7 +68,10 @@ func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) http.H
 	api.HandleFunc("GET /v1/chats", s.listChats)
 	api.HandleFunc("GET /v1/chats/search", s.searchChats)
 	api.HandleFunc("GET /v1/chats/{chatID}/messages", s.listMessages)
+	api.HandleFunc("GET /v1/chats/{chatID}/members", s.listChatMembers)
 	api.HandleFunc("GET /v1/messages/search", s.searchMessages)
+	api.HandleFunc("GET /v1/contacts", s.listContacts)
+	api.HandleFunc("GET /v1/contacts/search", s.searchContacts)
 	api.HandleFunc("GET /v1/media/{mediaID}/url", s.mediaReadURL)
 	mux.Handle("/v1/", s.authenticate(api))
 
