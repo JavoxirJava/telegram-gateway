@@ -21,17 +21,17 @@ const (
 )
 
 type Account struct {
-	ID               string     `json:"id"`
-	UserID           string     `json:"user_id"`
-	TelegramUserID   *int64     `json:"telegram_user_id,omitempty"`
-	DisplayName      *string    `json:"display_name,omitempty"`
-	Username         *string    `json:"username,omitempty"`
-	Status           Status     `json:"status"`
-	ConnectedAt      *time.Time `json:"connected_at,omitempty"`
-	DisconnectedAt   *time.Time `json:"disconnected_at,omitempty"`
-	LastUpdateAt     *time.Time `json:"last_update_at,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID             string     `json:"id"`
+	UserID         string     `json:"user_id"`
+	TelegramUserID *int64     `json:"telegram_user_id,omitempty"`
+	DisplayName    *string    `json:"display_name,omitempty"`
+	Username       *string    `json:"username,omitempty"`
+	Status         Status     `json:"status"`
+	ConnectedAt    *time.Time `json:"connected_at,omitempty"`
+	DisconnectedAt *time.Time `json:"disconnected_at,omitempty"`
+	LastUpdateAt   *time.Time `json:"last_update_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type Repository struct {
