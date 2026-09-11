@@ -52,6 +52,9 @@ func (r *Repository) IssueToken(ctx context.Context, clientID, accountID string,
 	if err != nil {
 		return GeneratedToken{}, err
 	}
+	if expiresAt != nil && !expiresAt.After(time.Now()) {
+		return GeneratedToken{}, errors.New("token expiry must be in the future")
+	}
 
 	token, err := GenerateToken()
 	if err != nil {
@@ -63,7 +66,7 @@ func (r *Repository) IssueToken(ctx context.Context, clientID, accountID string,
 		scopeValues[i] = string(scope)
 	}
 
-	_, err = r.pool.Exec(ctx, `
+	result, err := r.pool.Exec(ctx, `
 		INSERT INTO access_tokens (
 			client_id, account_id, token_prefix, token_hash, scopes, expires_at
 		)
@@ -79,6 +82,9 @@ func (r *Repository) IssueToken(ctx context.Context, clientID, accountID string,
 	if err != nil {
 		return GeneratedToken{}, fmt.Errorf("issue access token: %w", err)
 	}
+	if result.RowsAffected() != 1 {
+		return GeneratedToken{}, errors.New("client cannot access this Telegram account")
+	}
 	return token, nil
 }
 
@@ -86,6 +92,9 @@ func (r *Repository) AuthenticateBearer(ctx context.Context, plaintext string) (
 	plaintext = strings.TrimSpace(plaintext)
 	if plaintext == "" {
 		return Principal{}, errors.New("bearer token is required")
+	}
+	if !strings.HasPrefix(plaintext, tokenPrefix) {
+		return Principal{}, errors.New("invalid bearer token")
 	}
 
 	hash := sha256.Sum256([]byte(plaintext))
