@@ -16,13 +16,17 @@ type Kind string
 
 const (
 	KindAccountBootstrap Kind = "account.bootstrap"
+	KindContactsSync     Kind = "contacts.sync"
 	KindChatHistory      Kind = "chat.history"
+	KindChatMembers      Kind = "chat.members"
 	KindMediaDownload    Kind = "media.download"
 )
 
 const (
 	SubjectAccountBootstrap = "telegram.sync.account"
+	SubjectContactsSync     = "telegram.sync.contacts"
 	SubjectChatHistory      = "telegram.sync.chat"
+	SubjectChatMembers      = "telegram.sync.members"
 	SubjectMediaDownload    = "telegram.media.download"
 )
 
@@ -37,14 +41,23 @@ type Envelope struct {
 }
 
 type AccountBootstrapPayload struct {
-	Force bool `json:"force"`
+	Force  bool   `json:"force"`
+	Cursor string `json:"cursor,omitempty"`
 }
+
+type ContactsSyncPayload struct{}
 
 type ChatHistoryPayload struct {
 	ChatID            string `json:"chat_id"`
 	TelegramChatID    int64  `json:"telegram_chat_id"`
 	BeforeMessageID   int64  `json:"before_message_id,omitempty"`
 	RequestedPageSize int    `json:"requested_page_size"`
+}
+
+type ChatMembersPayload struct {
+	ChatID         string `json:"chat_id"`
+	TelegramChatID int64  `json:"telegram_chat_id"`
+	Limit          int    `json:"limit"`
 }
 
 type MediaDownloadPayload struct {
@@ -106,7 +119,7 @@ func (e Envelope) Validate() error {
 
 func (k Kind) Valid() bool {
 	switch k {
-	case KindAccountBootstrap, KindChatHistory, KindMediaDownload:
+	case KindAccountBootstrap, KindContactsSync, KindChatHistory, KindChatMembers, KindMediaDownload:
 		return true
 	default:
 		return false
@@ -117,8 +130,12 @@ func SubjectFor(kind Kind) (string, error) {
 	switch kind {
 	case KindAccountBootstrap:
 		return SubjectAccountBootstrap, nil
+	case KindContactsSync:
+		return SubjectContactsSync, nil
 	case KindChatHistory:
 		return SubjectChatHistory, nil
+	case KindChatMembers:
+		return SubjectChatMembers, nil
 	case KindMediaDownload:
 		return SubjectMediaDownload, nil
 	default:
