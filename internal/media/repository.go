@@ -50,16 +50,38 @@ func (r *Repository) RegisterPending(ctx context.Context, messageID, mediaType s
 	}
 
 	var id string
-	err := r.pool.QueryRow(ctx, `
-		INSERT INTO message_media (
-			message_id, media_type, telegram_file_id, unique_file_key,
-			mime_type, file_name, file_size, download_status
-		) VALUES (
-			$1::uuid, $2, $3, $4, $5, $6, $7, 'pending'
-		)
-		RETURNING id::text`,
-		messageID, mediaType, telegramFileID, trimOptional(uniqueFileKey), trimOptional(mimeType), trimOptional(fileName), fileSize,
-	).Scan(&id)
+	var err error
+	if telegramFileID != nil {
+		err = r.pool.QueryRow(ctx, `
+			INSERT INTO message_media (
+				message_id, media_type, telegram_file_id, unique_file_key,
+				mime_type, file_name, file_size, download_status
+			) VALUES (
+				$1::uuid, $2, $3, $4, $5, $6, $7, 'pending'
+			)
+			ON CONFLICT (message_id, media_type, telegram_file_id)
+			WHERE telegram_file_id IS NOT NULL
+			DO UPDATE SET
+				unique_file_key = COALESCE(EXCLUDED.unique_file_key, message_media.unique_file_key),
+				mime_type = COALESCE(EXCLUDED.mime_type, message_media.mime_type),
+				file_name = COALESCE(EXCLUDED.file_name, message_media.file_name),
+				file_size = COALESCE(EXCLUDED.file_size, message_media.file_size),
+				updated_at = NOW()
+			RETURNING id::text`,
+			messageID, mediaType, telegramFileID, trimOptional(uniqueFileKey), trimOptional(mimeType), trimOptional(fileName), fileSize,
+		).Scan(&id)
+	} else {
+		err = r.pool.QueryRow(ctx, `
+			INSERT INTO message_media (
+				message_id, media_type, telegram_file_id, unique_file_key,
+				mime_type, file_name, file_size, download_status
+			) VALUES (
+				$1::uuid, $2, NULL, $3, $4, $5, $6, 'skipped'
+			)
+			RETURNING id::text`,
+			messageID, mediaType, trimOptional(uniqueFileKey), trimOptional(mimeType), trimOptional(fileName), fileSize,
+		).Scan(&id)
+	}
 	if err != nil {
 		return "", fmt.Errorf("register message media: %w", err)
 	}
