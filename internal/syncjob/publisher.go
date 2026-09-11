@@ -65,11 +65,34 @@ func (p *Publisher) Publish(ctx context.Context, envelope Envelope) error {
 }
 
 func (p *Publisher) EnqueueAccountBootstrap(ctx context.Context, accountID string, force bool) error {
+	return p.enqueueAccountBootstrap(ctx, accountID, AccountBootstrapPayload{Force: force})
+}
+
+func (p *Publisher) EnqueueAccountBootstrapPage(ctx context.Context, accountID, cursor string) error {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" {
+		return fmt.Errorf("bootstrap cursor is required")
+	}
+	return p.enqueueAccountBootstrap(ctx, accountID, AccountBootstrapPayload{Cursor: cursor})
+}
+
+func (p *Publisher) enqueueAccountBootstrap(ctx context.Context, accountID string, payload AccountBootstrapPayload) error {
 	dedupKey := strings.TrimSpace(accountID)
-	if force {
+	if payload.Cursor != "" {
+		dedupKey += ":cursor:" + payload.Cursor
+	}
+	if payload.Force {
 		dedupKey += ":force:" + time.Now().UTC().Format("200601021504")
 	}
-	envelope, err := NewEnvelope(KindAccountBootstrap, accountID, dedupKey, AccountBootstrapPayload{Force: force})
+	envelope, err := NewEnvelope(KindAccountBootstrap, accountID, dedupKey, payload)
+	if err != nil {
+		return err
+	}
+	return p.Publish(ctx, envelope)
+}
+
+func (p *Publisher) EnqueueContactsSync(ctx context.Context, accountID string) error {
+	envelope, err := NewEnvelope(KindContactsSync, accountID, strings.TrimSpace(accountID), ContactsSyncPayload{})
 	if err != nil {
 		return err
 	}
@@ -91,6 +114,24 @@ func (p *Publisher) EnqueueChatHistory(ctx context.Context, accountID string, pa
 	}
 	dedupKey := fmt.Sprintf("%s:%d:%d", payload.ChatID, payload.BeforeMessageID, payload.RequestedPageSize)
 	envelope, err := NewEnvelope(KindChatHistory, accountID, dedupKey, payload)
+	if err != nil {
+		return err
+	}
+	return p.Publish(ctx, envelope)
+}
+
+func (p *Publisher) EnqueueChatMembers(ctx context.Context, accountID string, payload ChatMembersPayload) error {
+	if strings.TrimSpace(payload.ChatID) == "" || payload.TelegramChatID == 0 {
+		return fmt.Errorf("chat id and Telegram chat id are required")
+	}
+	if payload.Limit <= 0 {
+		payload.Limit = 100
+	}
+	if payload.Limit > 200 {
+		payload.Limit = 200
+	}
+	dedupKey := fmt.Sprintf("%s:%d", payload.ChatID, payload.Limit)
+	envelope, err := NewEnvelope(KindChatMembers, accountID, dedupKey, payload)
 	if err != nil {
 		return err
 	}
