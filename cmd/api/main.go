@@ -11,17 +11,20 @@ import (
 	"time"
 
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
+	"github.com/JavoxirJava/telegram-gateway/internal/accounts"
 	"github.com/JavoxirJava/telegram-gateway/internal/audit"
 	"github.com/JavoxirJava/telegram-gateway/internal/chats"
 	"github.com/JavoxirJava/telegram-gateway/internal/config"
 	"github.com/JavoxirJava/telegram-gateway/internal/health"
 	"github.com/JavoxirJava/telegram-gateway/internal/httpserver"
+	"github.com/JavoxirJava/telegram-gateway/internal/media"
 	"github.com/JavoxirJava/telegram-gateway/internal/messages"
 	"github.com/JavoxirJava/telegram-gateway/internal/natsbus"
 	"github.com/JavoxirJava/telegram-gateway/internal/objectstore"
 	"github.com/JavoxirJava/telegram-gateway/internal/postgres"
 	"github.com/JavoxirJava/telegram-gateway/internal/ratelimit"
 	"github.com/JavoxirJava/telegram-gateway/internal/redisstore"
+	"github.com/JavoxirJava/telegram-gateway/internal/syncjob"
 )
 
 func main() {
@@ -61,7 +64,14 @@ func main() {
 	}
 	defer bus.Close()
 
-	if _, err := objectstore.Open(startupCtx, cfg.MinIO); err != nil {
+	publisher := syncjob.NewPublisher(bus.JetStream)
+	if err := publisher.EnsureStream(startupCtx); err != nil {
+		logger.Error("failed to initialize sync stream", "error", err)
+		os.Exit(1)
+	}
+
+	store, err := objectstore.Open(startupCtx, cfg.MinIO)
+	if err != nil {
 		logger.Error("failed to initialize object store", "error", err)
 		os.Exit(1)
 	}
@@ -69,11 +79,14 @@ func main() {
 	cancelStartup()
 
 	checker := health.New(cfg)
+	mediaRepository := media.NewRepository(pool)
 	deps := httpserver.Dependencies{
 		Access:   access.NewRepository(pool),
+		Accounts: accounts.NewRepository(pool),
 		Audit:    audit.NewWriter(pool),
 		Chats:    chats.NewRepository(pool),
 		Messages: messages.NewRepository(pool),
+		Media:    media.NewService(mediaRepository, store),
 		Limiter:  ratelimit.New(redisClient),
 	}
 	handler := httpserver.New(logger, checker, deps)
