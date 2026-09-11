@@ -1,0 +1,38 @@
+name: Development toolchain
+on:
+  push:
+    branches: [feat/tdlib-runtime]
+    paths: ['.github/workflows/development-toolchain.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Prepare verified public module cache
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/gateway-development/modules" "$RUNNER_TEMP/gateway-development/project"
+          cp go.mod go.sum "$RUNNER_TEMP/gateway-development/project/"
+          cd "$RUNNER_TEMP/gateway-development/project"
+          export GOMODCACHE="$RUNNER_TEMP/gateway-development/modules"
+          go get github.com/modelcontextprotocol/go-sdk@v1.7.0
+          go mod download all
+          go mod verify
+          cp -a "$(go env GOROOT)" "$RUNNER_TEMP/gateway-development/go"
+          tar -czf "$RUNNER_TEMP/gateway-development.tar.gz" -C "$RUNNER_TEMP/gateway-development" go modules project
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gateway-development-toolchain
+          path: ${{ runner.temp }}/gateway-development.tar.gz
+          retention-days: 1
+          if-no-files-found: error
