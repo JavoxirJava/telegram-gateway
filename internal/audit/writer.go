@@ -111,7 +111,7 @@ func (w *Writer) Write(ctx context.Context, event Event) error {
 		event.IPAddress,
 		event.UserAgent,
 		event.RequestID,
-		metadataJSON,
+		string(metadataJSON),
 		previousHash,
 		currentHash,
 		event.CreatedAt,
