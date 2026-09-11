@@ -57,6 +57,7 @@ type ChatHistoryPayload struct {
 type ChatMembersPayload struct {
 	ChatID         string `json:"chat_id"`
 	TelegramChatID int64  `json:"telegram_chat_id"`
+	Cursor         string `json:"cursor,omitempty"`
 	Limit          int    `json:"limit"`
 }
 
