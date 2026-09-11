@@ -13,7 +13,10 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/config"
 	"github.com/JavoxirJava/telegram-gateway/internal/health"
 	"github.com/JavoxirJava/telegram-gateway/internal/httpserver"
+	"github.com/JavoxirJava/telegram-gateway/internal/natsbus"
+	"github.com/JavoxirJava/telegram-gateway/internal/objectstore"
 	"github.com/JavoxirJava/telegram-gateway/internal/postgres"
+	"github.com/JavoxirJava/telegram-gateway/internal/redisstore"
 )
 
 func main() {
@@ -29,14 +32,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	startupCtx, cancelStartup := context.WithTimeout(ctx, 10*time.Second)
+	startupCtx, cancelStartup := context.WithTimeout(ctx, 20*time.Second)
+	defer cancelStartup()
+
 	pool, err := postgres.Open(startupCtx, cfg.Postgres)
-	cancelStartup()
 	if err != nil {
 		logger.Error("failed to connect to postgres", "error", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	redisClient, err := redisstore.Open(startupCtx, cfg.Redis)
+	if err != nil {
+		logger.Error("failed to connect to redis", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = redisClient.Close() }()
+
+	bus, err := natsbus.Open(cfg.NATS)
+	if err != nil {
+		logger.Error("failed to connect to nats", "error", err)
+		os.Exit(1)
+	}
+	defer bus.Close()
+
+	if _, err := objectstore.Open(startupCtx, cfg.MinIO); err != nil {
+		logger.Error("failed to initialize object store", "error", err)
+		os.Exit(1)
+	}
+
+	cancelStartup()
 
 	checker := health.New(cfg)
 	handler := httpserver.New(logger, checker)
