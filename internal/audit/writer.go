@@ -54,6 +54,10 @@ func (w *Writer) Write(ctx context.Context, event Event) error {
 	} else {
 		event.CreatedAt = event.CreatedAt.UTC()
 	}
+	// PostgreSQL timestamptz stores microsecond precision. The timestamp is part
+	// of the tamper-evident hash payload, so hash exactly what the database can
+	// reproduce later during verification.
+	event.CreatedAt = event.CreatedAt.Truncate(time.Microsecond)
 	if event.Metadata == nil {
 		event.Metadata = map[string]any{}
 	}
