@@ -130,9 +130,9 @@ func (p *Processor) handleChatHistory(ctx context.Context, envelope syncjob.Enve
 		return err
 	}
 	return p.writeAudit(ctx, envelope.AccountID, "TELEGRAM_CHAT_HISTORY_SYNCED", "chat", chatID, map[string]any{
-		"count":              len(items),
-		"before_message_id":  payload.BeforeMessageID,
+		"count":               len(items),
+		"before_message_id":   payload.BeforeMessageID,
 		"next_before_message": nextBefore,
-		"has_more":           nextBefore != 0,
+		"has_more":            nextBefore != 0,
 	})
 }
