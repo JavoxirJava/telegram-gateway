@@ -71,9 +71,9 @@ func (r *Repository) IssueToken(ctx context.Context, clientID, accountID string,
 
 	result, err := r.pool.Exec(ctx, `
 		INSERT INTO access_tokens (
-			client_id, account_id, token_prefix, token_hash, scopes, expires_at
+			client_id, account_id, user_id, token_prefix, token_hash, scopes, expires_at
 		)
-		SELECT $1::uuid, $2::uuid, $3, $4, $5::text[], $6
+		SELECT $1::uuid, $2::uuid, gc.user_id, $3, $4, $5::text[], $6
 		FROM gateway_clients gc
 		JOIN telegram_accounts ta ON ta.id = $2::uuid
 		WHERE gc.id = $1::uuid
@@ -104,8 +104,8 @@ func (r *Repository) AuthenticateBearer(ctx context.Context, plaintext string) (
 	err := r.pool.QueryRow(ctx, `
 		SELECT gc.user_id::text, at.client_id::text, gc.client_type, at.account_id::text, at.scopes
 		FROM access_tokens at
-		JOIN gateway_clients gc ON gc.id = at.client_id
-		JOIN telegram_accounts ta ON ta.id = at.account_id
+		JOIN gateway_clients gc ON gc.id = at.client_id AND gc.user_id = at.user_id
+		JOIN telegram_accounts ta ON ta.id = at.account_id AND ta.user_id = at.user_id
 		WHERE at.token_hash = $1
 		  AND at.revoked_at IS NULL
 		  AND (at.expires_at IS NULL OR at.expires_at > NOW())
