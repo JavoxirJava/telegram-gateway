@@ -15,9 +15,11 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/audit"
 	"github.com/JavoxirJava/telegram-gateway/internal/chats"
 	"github.com/JavoxirJava/telegram-gateway/internal/config"
+	"github.com/JavoxirJava/telegram-gateway/internal/contacts"
 	"github.com/JavoxirJava/telegram-gateway/internal/health"
 	"github.com/JavoxirJava/telegram-gateway/internal/httpserver"
 	"github.com/JavoxirJava/telegram-gateway/internal/media"
+	"github.com/JavoxirJava/telegram-gateway/internal/members"
 	"github.com/JavoxirJava/telegram-gateway/internal/messages"
 	"github.com/JavoxirJava/telegram-gateway/internal/natsbus"
 	"github.com/JavoxirJava/telegram-gateway/internal/objectstore"
@@ -85,6 +87,8 @@ func main() {
 		Accounts: accounts.NewRepository(pool),
 		Audit:    audit.NewWriter(pool),
 		Chats:    chats.NewRepository(pool),
+		Contacts: contacts.NewRepository(pool),
+		Members:  members.NewRepository(pool),
 		Messages: messages.NewRepository(pool),
 		Media:    media.NewService(mediaRepository, store),
 		Limiter:  ratelimit.New(redisClient),
