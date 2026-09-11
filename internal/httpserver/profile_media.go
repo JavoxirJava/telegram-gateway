@@ -3,10 +3,8 @@ package httpserver
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
-	"github.com/JavoxirJava/telegram-gateway/internal/media"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -43,35 +41,10 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Legacy signed URLs are retired. Do not redirect to object storage.
 func (s *Server) mediaReadURL(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, access.ScopeMediaRead)
-	if !ok {
+	if _, ok := s.requireScope(w, r, access.ScopeMediaRead); !ok {
 		return
 	}
-	mediaID := strings.TrimSpace(r.PathValue("mediaID"))
-	if mediaID == "" {
-		writeError(w, http.StatusBadRequest, "media id is required")
-		return
-	}
-
-	result, err := s.media.CreateReadURL(r.Context(), principal.AccountID, mediaID)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		writeError(w, http.StatusNotFound, "media not found")
-		return
-	case errors.Is(err, media.ErrNotReady):
-		writeError(w, http.StatusConflict, "media is not ready")
-		return
-	case err != nil:
-		s.logger.Error("create media read url failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to create media read url")
-		return
-	}
-
-	if !s.auditRead(w, r, principal, "API_MEDIA_URL_CREATED", "media", mediaID, map[string]any{
-		"expires_at": result.ExpiresAt,
-	}) {
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+	writeError(w, http.StatusGone, "signed media URLs are disabled; use the authenticated /content endpoint")
 }

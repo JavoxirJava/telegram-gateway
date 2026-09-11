@@ -7,26 +7,31 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
-	"github.com/JavoxirJava/telegram-gateway/internal/objectstore"
+	"github.com/minio/minio-go/v7"
 )
-
-const readURLTTL = 5 * time.Minute
 
 var ErrNotReady = errors.New("media is not ready")
 
-type ReadURL struct {
-	URL       string    `json:"url"`
-	ExpiresAt time.Time `json:"expires_at"`
+// RepositoryStore is the storage boundary used by both ingestion and reads.
+// Implementations must resolve reads through the active-message projection.
+type RepositoryStore interface {
+	GetActive(context.Context, string, string) (Item, error)
+	MarkFailed(context.Context, string, error) error
+	MarkReady(context.Context, string, string, string, int64, []byte) error
+}
+
+type ObjectStore interface {
+	Put(context.Context, string, io.Reader, int64, string) (minio.UploadInfo, error)
+	OpenReader(context.Context, string) (io.ReadCloser, int64, error)
 }
 
 type Service struct {
-	repository *Repository
-	store      *objectstore.Store
+	repository RepositoryStore
+	store      ObjectStore
 }
 
-func NewService(repository *Repository, store *objectstore.Store) *Service {
+func NewService(repository RepositoryStore, store ObjectStore) *Service {
 	return &Service{repository: repository, store: store}
 }
 
@@ -52,29 +57,6 @@ func (s *Service) StoreDownload(ctx context.Context, accountID, mediaID string, 
 		return fmt.Errorf("persist downloaded media state: %w", err)
 	}
 	return nil
-}
-
-func (s *Service) CreateReadURL(ctx context.Context, accountID, mediaID string) (ReadURL, error) {
-	item, err := s.repository.GetActive(ctx, accountID, mediaID)
-	if err != nil {
-		return ReadURL{}, err
-	}
-	if item.DownloadStatus != "ready" || item.ObjectKey == nil || strings.TrimSpace(*item.ObjectKey) == "" {
-		return ReadURL{}, ErrNotReady
-	}
-
-	fileName := ""
-	if item.FileName != nil {
-		fileName = *item.FileName
-	}
-	presigned, err := s.store.PresignedGet(ctx, *item.ObjectKey, readURLTTL, fileName)
-	if err != nil {
-		return ReadURL{}, fmt.Errorf("create media read url: %w", err)
-	}
-	return ReadURL{
-		URL:       presigned.String(),
-		ExpiresAt: time.Now().UTC().Add(readURLTTL),
-	}, nil
 }
 
 func ObjectKey(accountID, mediaID string) (string, error) {

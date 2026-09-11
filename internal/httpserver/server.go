@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -18,29 +19,39 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/ratelimit"
 )
 
+type BearerAuthenticator interface {
+	AuthenticateBearer(context.Context, string) (access.Principal, error)
+}
+type AuditWriter interface {
+	Write(context.Context, audit.Event) error
+}
+type MediaReader interface {
+	Open(context.Context, string, string, func(context.Context) error) (media.Content, error)
+}
+
 type Dependencies struct {
-	Access   *access.Repository
+	Access   BearerAuthenticator
 	Accounts *accounts.Repository
-	Audit    *audit.Writer
+	Audit    AuditWriter
 	Chats    *chats.Repository
 	Contacts *contacts.Repository
 	Members  *members.Repository
 	Messages *messages.Repository
-	Media    *media.Service
+	Media    MediaReader
 	Limiter  *ratelimit.Limiter
 }
 
 type Server struct {
 	logger   *slog.Logger
 	checker  *health.Checker
-	access   *access.Repository
+	access   BearerAuthenticator
 	accounts *accounts.Repository
-	audit    *audit.Writer
+	audit    AuditWriter
 	chats    *chats.Repository
 	contacts *contacts.Repository
 	members  *members.Repository
 	messages *messages.Repository
-	media    *media.Service
+	media    MediaReader
 	limiter  *ratelimit.Limiter
 }
 
@@ -73,6 +84,7 @@ func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) http.H
 	api.HandleFunc("GET /v1/contacts", s.listContacts)
 	api.HandleFunc("GET /v1/contacts/search", s.searchContacts)
 	api.HandleFunc("GET /v1/media/{mediaID}/url", s.mediaReadURL)
+	api.HandleFunc("GET /v1/media/{mediaID}/content", s.mediaContent)
 	mux.Handle("/v1/", s.authenticate(api))
 
 	return s.securityHeaders(s.accessLog(mux))
