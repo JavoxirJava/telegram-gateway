@@ -73,6 +73,11 @@ type Member struct {
 	Metadata       map[string]any
 }
 
+type MemberPage struct {
+	Items      []Member
+	NextCursor string
+}
+
 type Download struct {
 	Reader      io.ReadCloser
 	Size        int64
@@ -85,7 +90,7 @@ type Session interface {
 	ListChats(ctx context.Context, cursor string, limit int) (ChatPage, error)
 	GetChatHistory(ctx context.Context, telegramChatID, beforeMessageID int64, limit int) ([]Message, error)
 	ListContacts(ctx context.Context) ([]Contact, error)
-	ListMembers(ctx context.Context, telegramChatID int64, limit int) ([]Member, error)
+	ListMembers(ctx context.Context, telegramChatID int64, cursor string, limit int) (MemberPage, error)
 	DownloadFile(ctx context.Context, telegramFileID int64) (Download, error)
 }
 
