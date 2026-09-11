@@ -9,10 +9,10 @@ import (
 
 func TestDisposition(t *testing.T) {
 	tests := []struct {
-		name      string
-		err       error
-		action    ackAction
-		delay     time.Duration
+		name   string
+		err    error
+		action ackAction
+		delay  time.Duration
 	}{
 		{name: "success", err: nil, action: ackSuccess},
 		{name: "permanent", err: Permanent(errors.New("bad job")), action: ackTerminate},
