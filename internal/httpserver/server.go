@@ -7,18 +7,22 @@ import (
 	"time"
 
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
+	"github.com/JavoxirJava/telegram-gateway/internal/accounts"
 	"github.com/JavoxirJava/telegram-gateway/internal/audit"
 	"github.com/JavoxirJava/telegram-gateway/internal/chats"
 	"github.com/JavoxirJava/telegram-gateway/internal/health"
+	"github.com/JavoxirJava/telegram-gateway/internal/media"
 	"github.com/JavoxirJava/telegram-gateway/internal/messages"
 	"github.com/JavoxirJava/telegram-gateway/internal/ratelimit"
 )
 
 type Dependencies struct {
 	Access   *access.Repository
+	Accounts *accounts.Repository
 	Audit    *audit.Writer
 	Chats    *chats.Repository
 	Messages *messages.Repository
+	Media    *media.Service
 	Limiter  *ratelimit.Limiter
 }
 
@@ -26,9 +30,11 @@ type Server struct {
 	logger   *slog.Logger
 	checker  *health.Checker
 	access   *access.Repository
+	accounts *accounts.Repository
 	audit    *audit.Writer
 	chats    *chats.Repository
 	messages *messages.Repository
+	media    *media.Service
 	limiter  *ratelimit.Limiter
 }
 
@@ -37,9 +43,11 @@ func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) http.H
 		logger:   logger,
 		checker:  checker,
 		access:   deps.Access,
+		accounts: deps.Accounts,
 		audit:    deps.Audit,
 		chats:    deps.Chats,
 		messages: deps.Messages,
+		media:    deps.Media,
 		limiter:  deps.Limiter,
 	}
 
@@ -48,10 +56,12 @@ func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) http.H
 	mux.HandleFunc("GET /health/ready", s.ready)
 
 	api := http.NewServeMux()
+	api.HandleFunc("GET /v1/profile", s.profile)
 	api.HandleFunc("GET /v1/chats", s.listChats)
 	api.HandleFunc("GET /v1/chats/search", s.searchChats)
 	api.HandleFunc("GET /v1/chats/{chatID}/messages", s.listMessages)
 	api.HandleFunc("GET /v1/messages/search", s.searchMessages)
+	api.HandleFunc("GET /v1/media/{mediaID}/url", s.mediaReadURL)
 	mux.Handle("/v1/", s.authenticate(api))
 
 	return s.securityHeaders(s.accessLog(mux))
