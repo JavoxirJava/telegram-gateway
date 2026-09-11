@@ -31,8 +31,13 @@ are completed.
 * Atomic live mutation plus hash-chain audit in the same PostgreSQL transaction.
   Ordinary deleted rows remain with `deleted=true`. Persistent deletion IDs
   prevent a delayed history response from making a deleted message visible.
-* History writers preserve newer live edits. A short history page is no longer
-  incorrectly treated as the end of history.
+* History writers preserve newer live edits. The typed adapter now separates
+  filtered messages from source pagination progress. See `tdlib-adapter.md`.
+* Application-level native reads/authentication share atomic Redis budgets and
+  persistent FLOOD_WAIT cooldowns, including late 429 responses. See
+  `native-request-limits.md` for the precise scope and failure behavior.
+* Public signed media links have been retired in favor of an authenticated,
+  deletion-aware streaming proxy. See `media-access.md` for migration limits.
 
 The engine callback must **never synchronously call that same client**: its
 response follows the callback in the same ordered queue. Slow persistence
@@ -116,26 +121,29 @@ under the mirror/audit rules.
 
 ## Release gates still open
 
-1. Implement and test the complete typed `telegram.Session` adapter for history,
-   chat-list pagination, contacts/members and media. Wire it to the existing
-   JetStream worker through explicit per-account ownership/routing. The new
-   native agent currently processes live updates only and does not run that
-   historical worker. Media captions/type are mirrored, not attachment bytes.
+1. The typed `telegram.Session` adapter and filtered-page history contract are
+   implemented and tested (see `tdlib-adapter.md`). Wire the adapter/index to the
+   native host and JetStream worker with explicit per-account ownership/routing
+   and fences on all history/media writes. The native agent still processes
+   live updates only; it does not start the historical worker. Test anchor-only
+   history boundaries and session-generation cursor recovery with real TDLib.
+   Live media captions/type are mirrored, not attachment bytes.
 2. Persist and replay update checkpoints across crashes, reconcile reconnect
    gaps, and handle live edits for messages not yet present in the mirror.
    An in-memory ordered queue is not a durable inbox. Test chat deletion,
    access-loss, protection changes, auto-delete policies and restoration rules
    against a real account before exposing any data.
-3. Apply the shared Redis budgets and persistent FLOOD_WAIT rules to **every**
-   native adapter request and authentication attempt. The pre-existing worker
-   limiter is not automatically a limiter for arbitrary native `Read` calls.
+3. Native `Read` and authentication now use shared Redis budgets/FLOOD_WAIT.
+   On worker integration keep that single native charging boundary instead of
+   charging again in the generic worker. Test Redis persistence/recovery,
+   account-owner routing and native in-flight request limits under load.
 4. Complete MCP transport, OAuth/PKCE, consent/grants, account-scoped tool access
    and the authenticated public control plane. There is no public raw-TDLib
    passthrough endpoint and one must not be added.
-5. Replace the existing public MinIO presigned-link delivery with an authorized
-   media proxy or equivalent deletion-aware revocation. A previously issued
-   presigned link can remain usable until expiry after a soft deletion. Existing
-   API views alone do not close that access path.
+5. The deletion-aware media proxy is implemented. Validate it end-to-end with
+   real MinIO and deployed reverse proxies; rotate/revoke old signing credentials
+   or keep storage unreachable to retire any previously issued links. Already
+   delivered bytes cannot be recalled. Keep buckets and storage endpoints private.
 6. Configure least-privilege database roles, tenant row-level security as needed,
    TLS, secrets rotation/KMS integration, audit checkpoints outside the mutable
    database, encrypted PostgreSQL/media storage, backups and recovery drills.
