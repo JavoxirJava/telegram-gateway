@@ -17,16 +17,16 @@ const (
 )
 
 type Chat struct {
-	ID              string         `json:"id"`
-	AccountID       string         `json:"account_id"`
-	TelegramChatID  int64          `json:"telegram_chat_id"`
-	ChatType        string         `json:"chat_type"`
-	Title           *string        `json:"title,omitempty"`
-	Username        *string        `json:"username,omitempty"`
-	PhotoObjectKey  *string        `json:"photo_object_key,omitempty"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
-	LastMessageID   *int64         `json:"last_message_id,omitempty"`
-	LastMessageAt   *time.Time     `json:"last_message_at,omitempty"`
+	ID             string         `json:"id"`
+	AccountID      string         `json:"account_id"`
+	TelegramChatID int64          `json:"telegram_chat_id"`
+	ChatType       string         `json:"chat_type"`
+	Title          *string        `json:"title,omitempty"`
+	Username       *string        `json:"username,omitempty"`
+	PhotoObjectKey *string        `json:"photo_object_key,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	LastMessageID  *int64         `json:"last_message_id,omitempty"`
+	LastMessageAt  *time.Time     `json:"last_message_at,omitempty"`
 }
 
 type Repository struct {
