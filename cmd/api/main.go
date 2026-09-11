@@ -13,17 +13,30 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/config"
 	"github.com/JavoxirJava/telegram-gateway/internal/health"
 	"github.com/JavoxirJava/telegram-gateway/internal/httpserver"
+	"github.com/JavoxirJava/telegram-gateway/internal/postgres"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("failed to load configuration", "error", err)
 		os.Exit(1)
 	}
+
+	startupCtx, cancelStartup := context.WithTimeout(ctx, 10*time.Second)
+	pool, err := postgres.Open(startupCtx, cfg.Postgres)
+	cancelStartup()
+	if err != nil {
+		logger.Error("failed to connect to postgres", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
 
 	checker := health.New(cfg)
 	handler := httpserver.New(logger, checker)
@@ -37,9 +50,6 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -57,8 +67,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.App.ShutdownTimeout)
-	defer cancel()
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.App.ShutdownTimeout)
+	defer cancelShutdown()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
