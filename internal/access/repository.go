@@ -12,11 +12,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var ErrInvalidBearer = errors.New("invalid or expired bearer token")
+
 type Principal struct {
-	UserID    string
-	ClientID  string
-	AccountID string
-	Scopes    []Scope
+	UserID     string
+	ClientID   string
+	ClientType string
+	AccountID  string
+	Scopes     []Scope
 }
 
 type Repository struct {
@@ -90,11 +93,8 @@ func (r *Repository) IssueToken(ctx context.Context, clientID, accountID string,
 
 func (r *Repository) AuthenticateBearer(ctx context.Context, plaintext string) (Principal, error) {
 	plaintext = strings.TrimSpace(plaintext)
-	if plaintext == "" {
-		return Principal{}, errors.New("bearer token is required")
-	}
-	if !strings.HasPrefix(plaintext, tokenPrefix) {
-		return Principal{}, errors.New("invalid bearer token")
+	if plaintext == "" || !strings.HasPrefix(plaintext, tokenPrefix) {
+		return Principal{}, ErrInvalidBearer
 	}
 
 	hash := sha256.Sum256([]byte(plaintext))
@@ -102,7 +102,7 @@ func (r *Repository) AuthenticateBearer(ctx context.Context, plaintext string) (
 	var scopeValues []string
 
 	err := r.pool.QueryRow(ctx, `
-		SELECT gc.user_id::text, at.client_id::text, at.account_id::text, at.scopes
+		SELECT gc.user_id::text, at.client_id::text, gc.client_type, at.account_id::text, at.scopes
 		FROM access_tokens at
 		JOIN gateway_clients gc ON gc.id = at.client_id
 		JOIN telegram_accounts ta ON ta.id = at.account_id
@@ -112,9 +112,9 @@ func (r *Repository) AuthenticateBearer(ctx context.Context, plaintext string) (
 		  AND gc.status = 'active'
 		  AND ta.status = 'active'
 		LIMIT 1`, hash[:],
-	).Scan(&principal.UserID, &principal.ClientID, &principal.AccountID, &scopeValues)
+	).Scan(&principal.UserID, &principal.ClientID, &principal.ClientType, &principal.AccountID, &scopeValues)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Principal{}, errors.New("invalid or expired bearer token")
+		return Principal{}, ErrInvalidBearer
 	}
 	if err != nil {
 		return Principal{}, fmt.Errorf("authenticate bearer token: %w", err)
