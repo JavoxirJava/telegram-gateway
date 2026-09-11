@@ -23,8 +23,6 @@ const (
 	ActorAdmin    ActorType = "ADMIN"
 )
 
-const auditChainLockID int64 = 0x54474155444954
-
 type Event struct {
 	AccountID    *string
 	ActorType    ActorType
@@ -65,18 +63,19 @@ func (w *Writer) Write(ctx context.Context, event Event) error {
 		return fmt.Errorf("marshal audit metadata: %w", err)
 	}
 
+	chainKey := event.chainKey()
 	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin audit transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", auditChainLockID); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", chainKey); err != nil {
 		return fmt.Errorf("lock audit chain: %w", err)
 	}
 
 	var previousHash []byte
-	err = tx.QueryRow(ctx, "SELECT hash FROM audit_logs ORDER BY id DESC LIMIT 1").Scan(&previousHash)
+	err = tx.QueryRow(ctx, "SELECT hash FROM audit_logs WHERE chain_key = $1 ORDER BY id DESC LIMIT 1", chainKey).Scan(&previousHash)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("read previous audit hash: %w", err)
 	}
@@ -96,13 +95,14 @@ func (w *Writer) Write(ctx context.Context, event Event) error {
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO audit_logs (
-			account_id, actor_type, actor_id, action, resource_type, resource_id,
+			account_id, chain_key, actor_type, actor_id, action, resource_type, resource_id,
 			ip_address, user_agent, request_id, metadata, previous_hash, hash, created_at
 		) VALUES (
-			$1::uuid, $2, NULLIF($3, ''), $4, $5, NULLIF($6, ''),
-			NULLIF($7, '')::inet, NULLIF($8, ''), $9::uuid, $10::jsonb, $11, $12, $13
+			$1::uuid, $2, $3, NULLIF($4, ''), $5, $6, NULLIF($7, ''),
+			NULLIF($8, '')::inet, NULLIF($9, ''), $10::uuid, $11::jsonb, $12, $13, $14
 		)`,
 		event.AccountID,
+		chainKey,
 		string(event.ActorType),
 		event.ActorID,
 		event.Action,
@@ -158,6 +158,17 @@ func canonicalPayload(event Event, metadataJSON []byte) ([]byte, error) {
 		return nil, fmt.Errorf("marshal audit payload: %w", err)
 	}
 	return encoded, nil
+}
+
+func (event Event) chainKey() string {
+	if event.AccountID == nil {
+		return "global"
+	}
+	value := strings.TrimSpace(*event.AccountID)
+	if value == "" {
+		return "global"
+	}
+	return value
 }
 
 func (event Event) validate() error {
