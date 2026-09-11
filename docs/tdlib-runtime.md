@@ -59,7 +59,7 @@ Create a wrapping key once, outside the repository:
 
 ```sh
 install -d -m 700 "$HOME/.config/telegram-gateway"
-(umask 077; openssl rand -base64 32 > "$HOME/.config/telegram-gateway/master.key")
+(set -C; umask 077; openssl rand -base64 32 > "$HOME/.config/telegram-gateway/master.key")
 install -d -m 700 "$HOME/.local/share/telegram-gateway/sessions"
 CGO_ENABLED=1 go build -tags tdlib -o bin/tdlib-agent ./cmd/tdlib-agent
 
