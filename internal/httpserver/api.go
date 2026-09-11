@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"errors"
 	"net"
 	"net/http"
 	"strconv"
@@ -180,5 +179,3 @@ func remoteIP(remoteAddr string) string {
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{"error": message})
 }
-
-var _ = errors.Is
