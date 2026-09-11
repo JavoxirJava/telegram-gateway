@@ -25,7 +25,7 @@ type Message struct {
 	SenderChatID      *int64         `json:"sender_chat_id,omitempty"`
 	MessageType       string         `json:"message_type"`
 	Content           *string        `json:"content,omitempty"`
-	ContentEntities   map[string]any `json:"content_entities,omitempty"`
+	ContentEntities   []any          `json:"content_entities,omitempty"`
 	ReplyToMessageID  *int64         `json:"reply_to_message_id,omitempty"`
 	ForwardInfo       map[string]any `json:"forward_info,omitempty"`
 	RawMetadata       map[string]any `json:"raw_metadata,omitempty"`
@@ -60,7 +60,7 @@ func (r *Repository) Upsert(ctx context.Context, message Message) (string, error
 		return "", errors.New("sent_at is required")
 	}
 
-	entitiesJSON, err := marshalJSON(message.ContentEntities, map[string]any{})
+	entitiesJSON, err := marshalArrayJSON(message.ContentEntities)
 	if err != nil {
 		return "", fmt.Errorf("marshal content entities: %w", err)
 	}
@@ -68,7 +68,7 @@ func (r *Repository) Upsert(ctx context.Context, message Message) (string, error
 	if err != nil {
 		return "", fmt.Errorf("marshal forward info: %w", err)
 	}
-	metadataJSON, err := marshalJSON(message.RawMetadata, map[string]any{})
+	metadataJSON, err := marshalObjectJSON(message.RawMetadata)
 	if err != nil {
 		return "", fmt.Errorf("marshal raw metadata: %w", err)
 	}
@@ -274,9 +274,16 @@ func escapeLike(value string) string {
 	return value
 }
 
-func marshalJSON(value map[string]any, fallback map[string]any) ([]byte, error) {
+func marshalArrayJSON(value []any) ([]byte, error) {
 	if value == nil {
-		value = fallback
+		value = []any{}
+	}
+	return json.Marshal(value)
+}
+
+func marshalObjectJSON(value map[string]any) ([]byte, error) {
+	if value == nil {
+		value = map[string]any{}
 	}
 	return json.Marshal(value)
 }
