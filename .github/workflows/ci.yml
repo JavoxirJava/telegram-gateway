@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -35,6 +39,9 @@ jobs:
             go.sum
           if-no-files-found: error
           retention-days: 1
+
+      - name: Verify module metadata is committed
+        run: git diff --exit-code -- go.mod go.sum
 
       - name: Check formatting
         run: |
