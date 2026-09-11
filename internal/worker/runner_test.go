@@ -16,7 +16,7 @@ func TestDisposition(t *testing.T) {
 	}{
 		{name: "success", err: nil, action: ackSuccess},
 		{name: "permanent", err: Permanent(errors.New("bad job")), action: ackTerminate},
-		{name: "explicit retry", err: RetryAfter(42 * time.Second, errors.New("busy")), action: ackRetry, delay: 42 * time.Second},
+		{name: "explicit retry", err: RetryAfter(42*time.Second, errors.New("busy")), action: ackRetry, delay: 42 * time.Second},
 		{name: "generic retry", err: errors.New("temporary"), action: ackRetry, delay: genericRetryDelay},
 	}
 
