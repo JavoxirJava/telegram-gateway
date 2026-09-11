@@ -60,3 +60,34 @@ jobs:
 
       - name: Build
         run: go build ./cmd/api
+
+      - name: Start PostgreSQL 18
+        run: |
+          docker run -d --rm --name telegram-gateway-ci-postgres \
+            -e POSTGRES_DB=telegram_gateway \
+            -e POSTGRES_USER=telegram_gateway \
+            -e POSTGRES_PASSWORD=ci-password \
+            postgres:18.6-alpine
+          for i in $(seq 1 30); do
+            if docker exec telegram-gateway-ci-postgres pg_isready -U telegram_gateway -d telegram_gateway; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Apply database migrations
+        run: |
+          for file in $(find migrations -maxdepth 1 -name '*.up.sql' | sort); do
+            echo "Applying $file"
+            docker exec -i telegram-gateway-ci-postgres \
+              psql -v ON_ERROR_STOP=1 -U telegram_gateway -d telegram_gateway < "$file"
+          done
+
+      - name: Roll back database migrations
+        run: |
+          for file in $(find migrations -maxdepth 1 -name '*.down.sql' | sort -r); do
+            echo "Rolling back $file"
+            docker exec -i telegram-gateway-ci-postgres \
+              psql -v ON_ERROR_STOP=1 -U telegram_gateway -d telegram_gateway < "$file"
+          done
