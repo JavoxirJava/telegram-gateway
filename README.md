@@ -1,5 +1,9 @@
 # Telegram Gateway
 
+> Development checkpoint: the native TDLib agent is now available on this branch.
+> It is an operator-only live mirror, not a complete hosted MCP release. See
+> [TDLib runtime setup, tests and release gates](docs/tdlib-runtime.md).
+
 Private Telegram account gateway designed to expose controlled, read-only Telegram data to MCP clients and other API consumers.
 
 ## Current architecture

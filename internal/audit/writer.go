@@ -46,6 +46,26 @@ func NewWriter(pool *pgxpool.Pool) *Writer {
 }
 
 func (w *Writer) Write(ctx context.Context, event Event) error {
+	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin audit transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := w.WriteTx(ctx, tx, event); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit audit transaction: %w", err)
+	}
+	return nil
+}
+
+// WriteTx appends an audit event inside a caller-owned transaction. The caller
+// must commit or roll back. Never use an untrusted tenant identity here.
+func (w *Writer) WriteTx(ctx context.Context, tx pgx.Tx, event Event) error {
+	if tx == nil {
+		return errors.New("audit transaction is required")
+	}
 	if err := event.validate(); err != nil {
 		return err
 	}
@@ -68,12 +88,6 @@ func (w *Writer) Write(ctx context.Context, event Event) error {
 	}
 
 	chainKey := event.chainKey()
-	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin audit transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", chainKey); err != nil {
 		return fmt.Errorf("lock audit chain: %w", err)
 	}
@@ -124,9 +138,6 @@ func (w *Writer) Write(ctx context.Context, event Event) error {
 		return fmt.Errorf("insert audit log: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit audit transaction: %w", err)
-	}
 	return nil
 }
 

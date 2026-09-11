@@ -73,8 +73,16 @@ func (r *Repository) Upsert(ctx context.Context, message Message) (string, error
 		return "", fmt.Errorf("marshal raw metadata: %w", err)
 	}
 
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text || ':' || $2::uuid::text,11))", message.AccountID, message.ChatID); err != nil {
+		return "", err
+	}
 	var id string
-	err = r.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO messages (
 			account_id, chat_id, telegram_message_id, sender_telegram_id, sender_chat_id,
 			message_type, content, content_entities, reply_to_message_id, forward_info,
@@ -115,6 +123,9 @@ func (r *Repository) Upsert(ctx context.Context, message Message) (string, error
 	if err != nil {
 		return "", fmt.Errorf("upsert message: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 
@@ -129,8 +140,21 @@ func (r *Repository) MarkDeleted(ctx context.Context, accountID, chatID string, 
 		deletedAt = time.Now().UTC()
 	}
 
-	_, err := r.pool.Exec(ctx, `
-		UPDATE messages
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text || ':' || $2::uuid::text,11))", accountID, chatID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO telegram_message_tombstones(account_id,telegram_chat_id,telegram_message_id,deleted_at)
+ SELECT account_id,telegram_chat_id,$3,$4 FROM chats WHERE id=$2::uuid AND account_id=$1::uuid
+ ON CONFLICT DO NOTHING`, accountID, chatID, telegramMessageID, deletedAt.UTC()); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+  UPDATE messages
 		SET deleted = TRUE,
 			deleted_at = COALESCE(deleted_at, $4),
 			updated_at = NOW()
@@ -142,7 +166,7 @@ func (r *Repository) MarkDeleted(ctx context.Context, accountID, chatID string, 
 	if err != nil {
 		return fmt.Errorf("soft-delete message: %w", err)
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) ListActiveByChat(ctx context.Context, accountID, chatID string, cursor *Cursor, limit int) ([]Message, error) {

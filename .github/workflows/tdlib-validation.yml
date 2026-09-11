@@ -3,6 +3,7 @@ name: TDLib validation
 on:
   push:
     branches: [feat/tdlib-runtime]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -16,22 +17,45 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: telegram_gateway
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: telegram_gateway
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U telegram_gateway -d telegram_gateway"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://telegram_gateway:ci-password@localhost:5432/telegram_gateway?sslmode=disable
+      PGPASSWORD: ci-password
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Archive tracked development sources
-        run: git archive --format=tar --output=source.tar HEAD
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tdlib-development-source
-          path: source.tar
-          retention-days: 1
-          if-no-files-found: error
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - run: go mod verify
-      - run: go test -race -count=1 ./...
+      - name: Check formatting
+        run: test -z "$(gofmt -l ./cmd ./internal)"
+      - name: Apply database migrations
+        run: |
+          for file in $(find migrations -maxdepth 1 -name '*.up.sql' | sort); do
+            psql -h localhost -U telegram_gateway -d telegram_gateway -v ON_ERROR_STOP=1 < "$file"
+          done
+      - name: Unit and PostgreSQL integration tests
+        run: go test -race -count=1 ./...
+      - name: Native ABI fixture and race tests
+        run: CGO_ENABLED=1 go test -race -tags tdlib -count=1 ./internal/tdjson/... ./internal/tdlib ./internal/sessionkey ./internal/tglive
       - run: go vet ./...
       - run: go build ./cmd/...
+      - name: Build native agent
+        run: CGO_ENABLED=1 go build -tags tdlib ./cmd/tdlib-agent
+      - name: Roll back migrations
+        run: |
+          for file in $(find migrations -maxdepth 1 -name '*.down.sql' | sort -r); do
+            psql -h localhost -U telegram_gateway -d telegram_gateway -v ON_ERROR_STOP=1 < "$file"
+          done

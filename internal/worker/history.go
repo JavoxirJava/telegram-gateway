@@ -105,9 +105,9 @@ func (p *Processor) handleChatHistory(ctx context.Context, envelope syncjob.Enve
 	}
 
 	nextBefore := int64(0)
-	if len(items) == payload.RequestedPageSize && oldestMessageID != nil {
+	if len(items) > 0 && oldestMessageID != nil {
 		nextBefore = *oldestMessageID
-		if nextBefore == payload.BeforeMessageID {
+		if payload.BeforeMessageID > 0 && nextBefore >= payload.BeforeMessageID {
 			return p.failSync(ctx, lease, Permanent(errors.New("Telegram history pagination did not advance")))
 		}
 		if err := p.publisher.EnqueueChatHistory(ctx, envelope.AccountID, syncjob.ChatHistoryPayload{
