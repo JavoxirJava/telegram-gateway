@@ -1,0 +1,37 @@
+name: TDLib validation
+
+on:
+  push:
+    branches: [feat/tdlib-runtime]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tdlib-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive tracked development sources
+        run: git archive --format=tar --output=source.tar HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tdlib-development-source
+          path: source.tar
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go mod verify
+      - run: go test -race -count=1 ./...
+      - run: go vet ./...
+      - run: go build ./cmd/...
