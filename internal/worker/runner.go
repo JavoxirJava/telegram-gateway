@@ -65,7 +65,10 @@ func (r *Runner) EnsureConsumer(ctx context.Context) (jetstream.Consumer, error)
 }
 
 func (r *Runner) Run(ctx context.Context) error {
-	consumer, err := r.EnsureConsumer(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	consumer, err := r.EnsureConsumer(runCtx)
 	if err != nil {
 		return err
 	}
@@ -83,7 +86,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	stopDone := make(chan struct{})
 	go func() {
 		defer close(stopDone)
-		<-ctx.Done()
+		<-runCtx.Done()
 		messages.Stop()
 	}()
 
@@ -93,7 +96,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func(workerSlot int) {
 			defer wg.Done()
-			if err := r.runSlot(ctx, messages, workerSlot); err != nil && ctx.Err() == nil {
+			if err := r.runSlot(runCtx, messages, workerSlot); err != nil && runCtx.Err() == nil {
 				select {
 				case errCh <- err:
 				default:
@@ -110,16 +113,19 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		cancel()
 		<-workersDone
 		<-stopDone
 		return nil
 	case err := <-errCh:
-		messages.Stop()
+		cancel()
 		<-workersDone
+		<-stopDone
 		return err
 	case <-workersDone:
+		cancel()
+		<-stopDone
 		if ctx.Err() != nil {
-			<-stopDone
 			return nil
 		}
 		return errors.New("all Telegram worker slots stopped unexpectedly")
