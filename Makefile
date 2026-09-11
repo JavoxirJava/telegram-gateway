@@ -22,7 +22,13 @@ infra-logs:
 	docker compose logs -f --tail=200
 
 migrate-up:
-	docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < migrations/000001_core_schema.up.sql
+	@for file in $$(find migrations -maxdepth 1 -name '*.up.sql' | sort); do \
+		echo "Applying $$file"; \
+		docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < "$$file" || exit 1; \
+	done
 
 migrate-down:
-	docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < migrations/000001_core_schema.down.sql
+	@for file in $$(find migrations -maxdepth 1 -name '*.down.sql' | sort -r); do \
+		echo "Rolling back $$file"; \
+		docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < "$$file" || exit 1; \
+	done
