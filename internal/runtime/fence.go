@@ -32,3 +32,10 @@ func (r *Repository) Check(ctx context.Context, l Lease) error {
 	}
 	return err
 }
+
+// LockAccountTx gives live, historical and retry writers one lock order:
+// ownership rows, account lock, then data/job/audit rows. Never hold it over RPCs.
+func LockAccountTx(ctx context.Context, tx pgx.Tx, account string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,12))`, account)
+	return err
+}

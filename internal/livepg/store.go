@@ -71,6 +71,9 @@ func (s *Store) ApplyTx(ctx context.Context, tx pgx.Tx, accountID string, event 
 		}
 	}
 
+	if err := sessionruntime.LockAccountTx(ctx, tx, accountID); err != nil {
+		return err
+	}
 	var chatID string
 	if event.Kind == "chat" {
 		err = tx.QueryRow(ctx, `INSERT INTO chats(account_id,telegram_chat_id,chat_type,title) VALUES($1::uuid,$2,$3,$4)

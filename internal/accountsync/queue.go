@@ -52,6 +52,9 @@ func (q *Queue) transaction(ctx context.Context, fn func(context.Context, pgx.Tx
 	if err = sessionruntime.FenceTx(ctx, tx, q.lease); err != nil {
 		return err
 	}
+	if err = sessionruntime.LockAccountTx(ctx, tx, q.lease.AccountID); err != nil {
+		return err
+	}
 	if err = fn(ctx, tx); err != nil {
 		return err
 	}

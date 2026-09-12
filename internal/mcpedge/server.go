@@ -199,7 +199,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 				return nil, nil, errors.New("authorization changed")
 			}
 			var result any
-			if json.Unmarshal(response.body.Bytes(), &result) != nil {
+			decoder := json.NewDecoder(bytes.NewReader(response.body.Bytes()))
+			decoder.UseNumber() // Preserve int64 Telegram IDs beyond float64 precision.
+			if decoder.Decode(&result) != nil {
 				return nil, nil, errors.New("invalid backend result")
 			}
 			return nil, result, nil

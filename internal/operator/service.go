@@ -10,6 +10,7 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
 	"github.com/JavoxirJava/telegram-gateway/internal/audit"
 	"github.com/JavoxirJava/telegram-gateway/internal/oauthrs"
+	sessionruntime "github.com/JavoxirJava/telegram-gateway/internal/runtime"
 	"github.com/JavoxirJava/telegram-gateway/internal/sessionkey"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -142,6 +143,9 @@ func (s Service) Retry(ctx context.Context, account, job string) error {
 		return errors.New("invalid account or job")
 	}
 	return s.transaction(ctx, func(tx pgx.Tx) error {
+		if e := sessionruntime.LockAccountTx(ctx, tx, account); e != nil {
+			return e
+		}
 		tag, e := tx.Exec(ctx, `UPDATE gateway_sync_jobs j SET status='pending',attempts=0,due_at=NOW(),last_error_code=NULL,updated_at=NOW() FROM telegram_session_runtime r WHERE j.account_id=$1::uuid AND j.id=$2::uuid AND j.status='dead' AND r.account_id=j.account_id AND r.generation=j.generation AND r.desired_state='online'`, account, job)
 		if e != nil {
 			return e

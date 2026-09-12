@@ -149,3 +149,19 @@ func TestResponseWriterBounds(t *testing.T) {
 		t.Fatal("unbounded result")
 	}
 }
+
+func TestSDKPreservesLargeTelegramIdentifiers(t *testing.T) {
+	a := &authFake{scopes: []access.Scope{access.ScopeProfileRead}}
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"telegram_user_id":9007199254740993}}`)
+	})
+	h, e := New(Config{PublicURL: "https://gateway.test/mcp", Issuer: "https://issuer.test", Limit: func(context.Context, access.Principal) (time.Duration, error) { return 0, nil }}, a, api)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, request(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_profile","arguments":{}}}`))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "9007199254740993") {
+		t.Fatal("identifier lost precision", w.Code, w.Body.String())
+	}
+}
