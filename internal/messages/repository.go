@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JavoxirJava/telegram-gateway/internal/dbtx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -27,8 +28,8 @@ type Message struct {
 	Content           *string        `json:"content,omitempty"`
 	ContentEntities   []any          `json:"content_entities,omitempty"`
 	ReplyToMessageID  *int64         `json:"reply_to_message_id,omitempty"`
-	ForwardInfo       map[string]any `json:"forward_info,omitempty"`
-	RawMetadata       map[string]any `json:"raw_metadata,omitempty"`
+	ForwardInfo       map[string]any `json:"-"`
+	RawMetadata       map[string]any `json:"-"`
 	SentAt            time.Time      `json:"sent_at"`
 	EditedAt          *time.Time     `json:"edited_at,omitempty"`
 }
@@ -39,12 +40,15 @@ type Cursor struct {
 }
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool dbtx.DB
 }
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
+
+// NewTx binds every mutation to a transaction owned and fenced by the caller.
+func NewTx(tx dbtx.DB) *Repository { return &Repository{pool: tx} }
 
 func (r *Repository) Upsert(ctx context.Context, message Message) (string, error) {
 	if strings.TrimSpace(message.AccountID) == "" || strings.TrimSpace(message.ChatID) == "" {

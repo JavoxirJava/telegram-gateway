@@ -1,3 +1,7 @@
+> **Historical checkpoint document.** The agent now wires the typed adapter and
+> account-routed worker. See `operations.md` and `mcp-oauth.md` for current setup
+> and the remaining real-infrastructure validation boundary.
+
 # Governed typed TDLib adapter
 
 `internal/tdadapter.Adapter` implements `telegram.Session` and the single-account

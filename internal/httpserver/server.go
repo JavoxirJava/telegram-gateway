@@ -17,6 +17,7 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/members"
 	"github.com/JavoxirJava/telegram-gateway/internal/messages"
 	"github.com/JavoxirJava/telegram-gateway/internal/ratelimit"
+	"github.com/JavoxirJava/telegram-gateway/internal/readmodel"
 )
 
 type BearerAuthenticator interface {
@@ -30,44 +31,47 @@ type MediaReader interface {
 }
 
 type Dependencies struct {
-	Access   BearerAuthenticator
-	Accounts *accounts.Repository
-	Audit    AuditWriter
-	Chats    *chats.Repository
-	Contacts *contacts.Repository
-	Members  *members.Repository
-	Messages *messages.Repository
-	Media    MediaReader
-	Limiter  *ratelimit.Limiter
+	ReadModel *readmodel.Repository
+	Access    BearerAuthenticator
+	Accounts  *accounts.Repository
+	Audit     AuditWriter
+	Chats     *chats.Repository
+	Contacts  *contacts.Repository
+	Members   *members.Repository
+	Messages  *messages.Repository
+	Media     MediaReader
+	Limiter   *ratelimit.Limiter
 }
 
 type Server struct {
-	logger   *slog.Logger
-	checker  *health.Checker
-	access   BearerAuthenticator
-	accounts *accounts.Repository
-	audit    AuditWriter
-	chats    *chats.Repository
-	contacts *contacts.Repository
-	members  *members.Repository
-	messages *messages.Repository
-	media    MediaReader
-	limiter  *ratelimit.Limiter
+	readModel *readmodel.Repository
+	logger    *slog.Logger
+	checker   *health.Checker
+	access    BearerAuthenticator
+	accounts  *accounts.Repository
+	audit     AuditWriter
+	chats     *chats.Repository
+	contacts  *contacts.Repository
+	members   *members.Repository
+	messages  *messages.Repository
+	media     MediaReader
+	limiter   *ratelimit.Limiter
 }
 
 func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) http.Handler {
 	s := &Server{
-		logger:   logger,
-		checker:  checker,
-		access:   deps.Access,
-		accounts: deps.Accounts,
-		audit:    deps.Audit,
-		chats:    deps.Chats,
-		contacts: deps.Contacts,
-		members:  deps.Members,
-		messages: deps.Messages,
-		media:    deps.Media,
-		limiter:  deps.Limiter,
+		readModel: deps.ReadModel,
+		logger:    logger,
+		checker:   checker,
+		access:    deps.Access,
+		accounts:  deps.Accounts,
+		audit:     deps.Audit,
+		chats:     deps.Chats,
+		contacts:  deps.Contacts,
+		members:   deps.Members,
+		messages:  deps.Messages,
+		media:     deps.Media,
+		limiter:   deps.Limiter,
 	}
 
 	mux := http.NewServeMux()
@@ -76,6 +80,8 @@ func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) http.H
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /v1/profile", s.profile)
+	api.HandleFunc("GET /v1/sync/status", s.syncStatus)
+	api.HandleFunc("GET /v1/messages/{messageID}/media", s.listMedia)
 	api.HandleFunc("GET /v1/chats", s.listChats)
 	api.HandleFunc("GET /v1/chats/search", s.searchChats)
 	api.HandleFunc("GET /v1/chats/{chatID}/messages", s.listMessages)

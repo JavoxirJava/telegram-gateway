@@ -21,7 +21,12 @@ func (s *Server) listChats(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.chats.ListActive(r.Context(), principal.AccountID, limit)
+	if cursor := r.URL.Query().Get("cursor"); cursor != "" && !canonicalUUID(cursor) {
+		writeError(w, http.StatusBadRequest, "invalid chat cursor")
+		return
+	}
+	page, err := s.chats.ListPage(r.Context(), principal.AccountID, r.URL.Query().Get("cursor"), limit)
+	items := page.Items
 	if err != nil {
 		s.logger.Error("list chats failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list chats")
@@ -30,7 +35,7 @@ func (s *Server) listChats(w http.ResponseWriter, r *http.Request) {
 	if !s.auditRead(w, r, principal, "API_CHATS_READ", "chat_collection", "", map[string]any{"count": len(items)}) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": items, "count": len(items)})
+	writeJSON(w, http.StatusOK, map[string]any{"data": items, "count": len(items), "next_cursor": page.NextCursor})
 }
 
 func (s *Server) searchChats(w http.ResponseWriter, r *http.Request) {

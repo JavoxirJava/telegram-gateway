@@ -1,0 +1,15 @@
+BEGIN;
+DROP VIEW active_message_media;
+DROP VIEW active_chat_members;
+DROP VIEW active_messages;
+DROP VIEW active_chats;
+ALTER TABLE message_media DROP COLUMN source_generation,DROP COLUMN retired;
+ALTER TABLE messages DROP COLUMN access_blocked;
+ALTER TABLE chats DROP COLUMN access_blocked;
+CREATE VIEW active_chats AS SELECT * FROM chats WHERE NOT deleted;
+CREATE VIEW active_messages AS SELECT m.id,m.account_id,m.chat_id,m.telegram_message_id,m.sender_telegram_id,m.sender_chat_id,m.message_type,m.content,m.content_entities,m.reply_to_message_id,m.forward_info,m.raw_metadata,m.sent_at,m.edited_at,m.deleted,m.deleted_at,m.created_at,m.updated_at FROM messages m JOIN chats c ON c.id=m.chat_id AND c.account_id=m.account_id WHERE NOT m.deleted AND NOT c.deleted;
+CREATE VIEW active_message_media AS SELECT mm.*,m.account_id,m.chat_id FROM message_media mm JOIN active_messages m ON m.id=mm.message_id;
+CREATE VIEW active_chat_members AS SELECT cm.* FROM chat_members cm JOIN chats c ON c.id=cm.chat_id AND c.account_id=cm.account_id WHERE NOT cm.deleted AND NOT c.deleted;
+DROP TABLE gateway_history_progress;
+DROP TABLE gateway_sync_jobs;
+COMMIT;

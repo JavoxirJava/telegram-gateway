@@ -48,15 +48,16 @@ type Authorization struct {
 }
 
 type Session struct {
-	client      *tdjson.Client
-	config      Config
-	sink        tdjson.UpdateHandler
-	mu          sync.Mutex
-	auth        Authorization
-	changed     chan struct{}
-	authGate    chan struct{}
-	closed      bool
-	requestGate chan struct{}
+	client             *tdjson.Client
+	config             Config
+	sink               tdjson.UpdateHandler
+	mu                 sync.Mutex
+	auth               Authorization
+	changed            chan struct{}
+	authGate           chan struct{}
+	closed             bool
+	authorizationEnded bool
+	requestGate        chan struct{}
 }
 
 func New(engine *tdjson.Engine, cfg Config, sink tdjson.UpdateHandler) (*Session, error) {
@@ -118,6 +119,12 @@ func (s *Session) onUpdate(ctx context.Context, raw json.RawMessage) error {
 	if u.Type == "updateAuthorizationState" {
 		return s.acceptState(u.State)
 	}
+	s.mu.Lock()
+	ended := s.authorizationEnded
+	s.mu.Unlock()
+	if ended {
+		return errors.New("verified native authorization ended; restart required")
+	}
 	if s.sink != nil {
 		return s.sink(ctx, raw)
 	}
@@ -144,6 +151,9 @@ func (s *Session) setState(raw json.RawMessage, onlyIfEmpty bool) error {
 	defer s.mu.Unlock()
 	if s.closed || (onlyIfEmpty && s.auth.Type != "") {
 		return nil
+	}
+	if s.auth.Type == Ready && state.Type != Ready {
+		s.authorizationEnded = true
 	}
 	s.auth = state
 	close(s.changed)
@@ -241,11 +251,14 @@ func (s *Session) RequestQR(ctx context.Context) error {
 // built on this without giving them access to login/session credentials.
 func (s *Session) Read(ctx context.Context, method string, fields map[string]any) (json.RawMessage, error) {
 	switch method {
-	case "getMe", "getChat", "getUser", "loadChats", "getChatHistory", "getContacts", "getSupergroupMembers", "getBasicGroupFullInfo", "downloadFile", "getFile":
+	case "getMe", "getMessage", "getMessages", "getChat", "getUser", "loadChats", "getChatHistory", "getContacts", "getSupergroupMembers", "getBasicGroupFullInfo", "downloadFile", "getFile":
 	default:
 		return nil, tdjson.ErrReadOnly
 	}
-	if s.State().Type != Ready {
+	s.mu.Lock()
+	valid := s.auth.Type == Ready && !s.authorizationEnded
+	s.mu.Unlock()
+	if !valid {
 		return nil, ErrNotReady
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -253,6 +266,12 @@ func (s *Session) Read(ctx context.Context, method string, fields map[string]any
 	raw, err := s.governedCall(ctx, method, fields)
 	if err != nil {
 		return nil, fmt.Errorf("Telegram read: %w", err)
+	}
+	s.mu.Lock()
+	valid = s.auth.Type == Ready && !s.authorizationEnded
+	s.mu.Unlock()
+	if !valid {
+		return nil, ErrNotReady
 	}
 	return raw, nil
 }

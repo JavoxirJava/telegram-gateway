@@ -4,6 +4,7 @@ package livepg
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 var ErrLeaseLost = errors.New("live update session lease lost")
 
 type Store struct {
+	After func(context.Context, pgx.Tx, string, tglive.Event) error
 	lease *sessionruntime.Lease
 	pool  *pgxpool.Pool
 	audit *audit.Writer
@@ -41,6 +43,16 @@ func (s *Store) Apply(ctx context.Context, accountID string, event tglive.Event)
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := s.ApplyTx(ctx, tx, accountID, event); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ApplyTx is used by the durable inbox; its caller commits the checkpoint,
+// mutation, attachment scheduling and audit together.
+func (s *Store) ApplyTx(ctx context.Context, tx pgx.Tx, accountID string, event tglive.Event) error {
+	var err error
 	if s.lease != nil {
 		lease := s.lease
 		if accountID != lease.AccountID {
@@ -62,10 +74,13 @@ func (s *Store) Apply(ctx context.Context, accountID string, event tglive.Event)
 	var chatID string
 	if event.Kind == "chat" {
 		err = tx.QueryRow(ctx, `INSERT INTO chats(account_id,telegram_chat_id,chat_type,title) VALUES($1::uuid,$2,$3,$4)
-   ON CONFLICT(account_id,telegram_chat_id) DO UPDATE SET title=EXCLUDED.title,chat_type=EXCLUDED.chat_type,updated_at=NOW()
+   ON CONFLICT(account_id,telegram_chat_id) DO UPDATE SET title=EXCLUDED.title,chat_type=EXCLUDED.chat_type,access_blocked=FALSE,updated_at=NOW()
    RETURNING id::text`, accountID, event.ChatID, event.ChatType, event.Title).Scan(&chatID)
 	} else {
 		err = tx.QueryRow(ctx, `SELECT id::text FROM chats WHERE account_id=$1::uuid AND telegram_chat_id=$2`, accountID, event.ChatID).Scan(&chatID)
+	}
+	if errors.Is(err, pgx.ErrNoRows) && (event.Kind == "blocked" || event.Kind == "allowed") {
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("resolve live chat: %w", err)
@@ -76,6 +91,10 @@ func (s *Store) Apply(ctx context.Context, accountID string, event tglive.Event)
 	}
 	switch event.Kind {
 	case "chat":
+	case "blocked", "allowed":
+		_, err = tx.Exec(ctx, `UPDATE chats SET access_blocked=$3,updated_at=NOW() WHERE account_id=$1::uuid AND id=$2::uuid`, accountID, chatID, event.Kind == "blocked")
+	case "inaccessible":
+		_, err = tx.Exec(ctx, `UPDATE messages SET access_blocked=TRUE,live_content_version=live_content_version+1,updated_at=NOW() WHERE account_id=$1::uuid AND chat_id=$2::uuid AND telegram_message_id=ANY($3::bigint[])`, accountID, chatID, event.MessageIDs)
 	case "title":
 		_, err = tx.Exec(ctx, `UPDATE chats SET title=$3,updated_at=NOW() WHERE id=$1::uuid AND account_id=$2::uuid`, chatID, accountID, event.Title)
 	case "message":
@@ -84,11 +103,11 @@ func (s *Store) Apply(ctx context.Context, accountID string, event tglive.Event)
    VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,1)
    ON CONFLICT(account_id,chat_id,telegram_message_id) DO UPDATE SET
    message_type=EXCLUDED.message_type,content=EXCLUDED.content,content_entities=EXCLUDED.content_entities,
-   edited_at=EXCLUDED.edited_at,live_content_version=messages.live_content_version+1,updated_at=NOW()`,
+   edited_at=EXCLUDED.edited_at,live_content_version=messages.live_content_version+1,access_blocked=FALSE,updated_at=NOW()`,
 			accountID, chatID, event.MessageID, event.SenderUserID, event.SenderChatID, event.ContentType, event.Content, string(event.Entities), event.SentAt, event.EditedAt)
 	case "content":
 		_, err = tx.Exec(ctx, `UPDATE messages SET message_type=$4,content=$5,content_entities=$6::jsonb,
-   live_content_version=live_content_version+1,updated_at=NOW()
+   live_content_version=live_content_version+1,access_blocked=FALSE,updated_at=NOW()
    WHERE account_id=$1::uuid AND chat_id=$2::uuid AND telegram_message_id=$3`, accountID, chatID, event.MessageID, event.ContentType, event.Content, string(event.Entities))
 	case "edited":
 		_, err = tx.Exec(ctx, `UPDATE messages SET edited_at=GREATEST(edited_at,$4::timestamptz),updated_at=NOW(),live_content_version=live_content_version+1
@@ -110,5 +129,86 @@ func (s *Store) Apply(ctx context.Context, accountID string, event tglive.Event)
 		Metadata: map[string]any{"telegram_chat_id": strconv.FormatInt(event.ChatID, 10), "message_id": strconv.FormatInt(event.MessageID, 10), "deletion_count": len(event.MessageIDs)}}); err != nil {
 		return err
 	}
+	if s.After != nil {
+		return s.After(ctx, tx, chatID, event)
+	}
+	return nil
+}
+
+// Accept commits a normalized event before application. key is generated once
+// per native callback and reused on dependency retries/uncertain commits.
+func (s *Store) Accept(ctx context.Context, account, key string, event tglive.Event) error {
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.Background())
+	if s.lease != nil {
+		if account != s.lease.AccountID {
+			return ErrLeaseLost
+		}
+		if err := sessionruntime.FenceTx(ctx, tx, *s.lease); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO gateway_live_inbox(account_id,event_key,payload) VALUES($1::uuid,$2::uuid,$3::jsonb) ON CONFLICT(account_id,event_key) DO NOTHING`, account, key, string(raw)); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
+}
+
+// Replay applies pending events in insertion order. It runs before new live
+// events on session activation and after every accepted update.
+func (s *Store) Replay(ctx context.Context, account string) error {
+	for {
+		done, err := s.replayOne(ctx, account)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+	}
+}
+func (s *Store) replayOne(ctx context.Context, account string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(context.Background())
+	if s.lease != nil {
+		if account != s.lease.AccountID {
+			return false, ErrLeaseLost
+		}
+		if err := sessionruntime.FenceTx(ctx, tx, *s.lease); err != nil {
+			return false, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,12))`, account); err != nil {
+		return false, err
+	}
+	var id int64
+	var raw []byte
+	err = tx.QueryRow(ctx, `SELECT id,payload FROM gateway_live_inbox WHERE account_id=$1::uuid AND applied_at IS NULL ORDER BY id LIMIT 1 FOR UPDATE`, account).Scan(&id, &raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var e tglive.Event
+	if json.Unmarshal(raw, &e) != nil {
+		return false, errors.New("invalid persisted normalized event")
+	}
+	if err = s.ApplyTx(ctx, tx, account, e); err != nil {
+		return false, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE gateway_live_inbox SET applied_at=NOW() WHERE id=$1`, id); err != nil {
+		return false, err
+	}
+	return false, tx.Commit(ctx)
 }

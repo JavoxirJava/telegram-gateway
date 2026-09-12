@@ -38,6 +38,7 @@ jobs:
       TEST_DATABASE_URL: postgres://telegram_gateway:ci-password@localhost:5432/telegram_gateway?sslmode=disable
       PGPASSWORD: ci-password
       TEST_REDIS_ADDR: localhost:6379
+      TEST_NATS_URL: nats://localhost:4222
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,6 +62,11 @@ jobs:
           for file in $(find migrations -maxdepth 1 -name '*.up.sql' | sort); do
             psql -h localhost -U telegram_gateway -d telegram_gateway -v ON_ERROR_STOP=1 < "$file"
           done
+      - name: Start account wakeup test server
+        run: docker run -d --rm --name gateway-test-nats -p 127.0.0.1:4222:4222 nats:2.14.6-alpine -js
+      - name: Validate least-privilege role setup
+        run: |
+          psql -h localhost -U telegram_gateway -d telegram_gateway -v ON_ERROR_STOP=1 < deployments/roles.sql
       - name: Unit and PostgreSQL integration tests
         run: go test -race -count=1 ./...
       - name: Native ABI fixture and race tests
@@ -74,3 +80,13 @@ jobs:
           for file in $(find migrations -maxdepth 1 -name '*.down.sql' | sort -r); do
             psql -h localhost -U telegram_gateway -d telegram_gateway -v ON_ERROR_STOP=1 < "$file"
           done
+      - name: Test tracked migrations on a fresh database and repeat
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_USER: telegram_gateway
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: gateway_migration_test
+        run: |
+          psql -h localhost -U telegram_gateway -d telegram_gateway -v ON_ERROR_STOP=1 -c 'CREATE DATABASE gateway_migration_test'
+          go run ./cmd/gateway-migrate
+          go run ./cmd/gateway-migrate

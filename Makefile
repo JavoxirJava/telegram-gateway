@@ -21,11 +21,9 @@ infra-down:
 infra-logs:
 	docker compose logs -f --tail=200
 
+# Uses host-accessible PostgreSQL configuration. Records migration checksums.
 migrate-up:
-	@for file in $$(find migrations -maxdepth 1 -name '*.up.sql' | sort); do \
-		echo "Applying $$file"; \
-		docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < "$$file" || exit 1; \
-	done
+	go run ./cmd/gateway-migrate
 
 migrate-down:
 	@for file in $$(find migrations -maxdepth 1 -name '*.down.sql' | sort -r); do \

@@ -1,3 +1,7 @@
+> **Historical checkpoint document.** The agent now wires the typed adapter and
+> account-routed worker. See `operations.md` and `mcp-oauth.md` for current setup
+> and the remaining real-infrastructure validation boundary.
+
 # TDLib native runtime: implementation checkpoint
 
 This branch adds the native runtime and an **operator-started, one-account live

@@ -20,16 +20,22 @@ import (
 	"time"
 
 	"github.com/JavoxirJava/telegram-gateway/internal/accounts"
+	"github.com/JavoxirJava/telegram-gateway/internal/accountsync"
 	"github.com/JavoxirJava/telegram-gateway/internal/config"
 	"github.com/JavoxirJava/telegram-gateway/internal/livepg"
+	"github.com/JavoxirJava/telegram-gateway/internal/natsbus"
+	"github.com/JavoxirJava/telegram-gateway/internal/objectstore"
 	"github.com/JavoxirJava/telegram-gateway/internal/postgres"
 	"github.com/JavoxirJava/telegram-gateway/internal/ratelimit"
 	"github.com/JavoxirJava/telegram-gateway/internal/redisstore"
 	sessionruntime "github.com/JavoxirJava/telegram-gateway/internal/runtime"
 	"github.com/JavoxirJava/telegram-gateway/internal/sessionkey"
+	"github.com/JavoxirJava/telegram-gateway/internal/tdadapter"
 	"github.com/JavoxirJava/telegram-gateway/internal/tdjson"
 	"github.com/JavoxirJava/telegram-gateway/internal/tdlib"
 	"github.com/JavoxirJava/telegram-gateway/internal/tglive"
+	"github.com/jackc/pgx/v5"
+	"github.com/nats-io/nats.go"
 )
 
 func main() {
@@ -38,7 +44,7 @@ func main() {
 	root := flag.String("sessions-root", "/var/lib/telegram-gateway/sessions", "owner-only persistent session directory")
 	library := flag.String("library", "/usr/local/lib/libtdjson.so", "absolute trusted TDLib shared-library path")
 	master := flag.String("master-key-file", "", "0600 file containing a base64 32-byte master key")
-	consent := flag.Bool("enable-live-mirror", false, "explicitly enable the authorized account's live cloud-message mirror")
+	consent := flag.Bool("enable-live-mirror", false, "explicitly enable authorized live and historical cloud-message synchronization")
 	flag.Parse()
 	if !*consent {
 		logger.Error("live mirror requires explicit --enable-live-mirror")
@@ -126,7 +132,7 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 		}
 	}()
 
-	lifeCtx, stopLife := context.WithCancel(context.Background())
+	lifeCtx, stopLife := context.WithCancel(ctx)
 	defer stopLife()
 	var lost atomic.Bool
 	failures := make(chan error, 4)
@@ -165,8 +171,22 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 			returnErr = errors.Join(returnErr, errors.New("native shutdown incomplete; process exit required before session reuse"))
 		}
 	}()
+	index := tdadapter.NewIndex()
+	connectionReady := make(chan struct{}, 1)
+	var connected atomic.Bool
+	queue := accountsync.NewQueue(pool, lease)
+	var notifier atomic.Pointer[nats.Conn]
 	normalizer := tglive.New()
 	store := livepg.NewWithLease(pool, lease)
+	store.After = func(c context.Context, tx pgx.Tx, chatID string, e tglive.Event) error {
+		switch e.Kind {
+		case "message", "content", "edited":
+			return queue.EnqueueTx(c, tx, "refresh", accountsync.Payload{ChatID: chatID, TelegramChatID: e.ChatID, MessageID: e.MessageID}, true)
+		case "allowed":
+			return queue.EnqueueTx(c, tx, "history", accountsync.Payload{ChatID: chatID, TelegramChatID: e.ChatID}, true)
+		}
+		return nil
+	}
 	gate := tglive.NewGate(func(c context.Context, raw json.RawMessage) error {
 		if lost.Load() {
 			return errors.New("session lease is no longer owned")
@@ -175,6 +195,12 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 		if err != nil || !relevant {
 			return err
 		}
+		var eventNonce [16]byte
+		if _, err = rand.Read(eventNonce[:]); err != nil {
+			return err
+		}
+		encoded := hex.EncodeToString(eventNonce[:])
+		eventKey := encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:]
 		// A database outage backpressures the ordered stream instead of silently
 		// losing updates. Raw content is never written to operational logs.
 		for {
@@ -182,12 +208,18 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 				return errors.New("session lease is no longer owned")
 			}
 			attempt, done := context.WithTimeout(c, 5*time.Second)
-			err = store.Apply(attempt, accountID, event)
+			err = store.Accept(attempt, accountID, eventKey, event)
+			if err == nil {
+				err = store.Replay(attempt, accountID)
+			}
 			done()
 			if err == nil {
+				if nc := notifier.Load(); nc != nil {
+					_ = nc.Publish("gateway.wake."+accountID, []byte("1"))
+				}
 				return nil
 			}
-			if errors.Is(err, livepg.ErrLeaseLost) {
+			if errors.Is(err, livepg.ErrLeaseLost) || errors.Is(err, sessionruntime.ErrLeaseLost) {
 				return err
 			}
 			select {
@@ -197,7 +229,31 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 			}
 		}
 	})
-	session, err := tdlib.New(engine, tdlib.Config{APIID: int(cfg.Telegram.APIID), APIHash: cfg.Telegram.APIHash, DatabaseDirectory: workspace.DatabaseDir, FilesDirectory: workspace.FilesDir, DatabaseKey: workspace.DatabaseKey, Requests: requests}, gate.Handle)
+	session, err := tdlib.New(engine, tdlib.Config{APIID: int(cfg.Telegram.APIID), APIHash: cfg.Telegram.APIHash, DatabaseDirectory: workspace.DatabaseDir, FilesDirectory: workspace.FilesDir, DatabaseKey: workspace.DatabaseKey, Requests: requests}, func(c context.Context, raw json.RawMessage) error {
+		if err := index.Observe(c, raw); err != nil {
+			return err
+		}
+		var state struct {
+			Type       string `json:"@type"`
+			Connection struct {
+				Type string `json:"@type"`
+			} `json:"state"`
+		}
+		if json.Unmarshal(raw, &state) != nil {
+			return errors.New("invalid connection event")
+		}
+		if state.Type == "updateConnectionState" {
+			ready := state.Connection.Type == "connectionStateReady"
+			old := connected.Swap(ready)
+			if ready && !old {
+				select {
+				case connectionReady <- struct{}{}:
+				default:
+				}
+			}
+		}
+		return gate.Handle(c, raw)
+	})
 	if err != nil {
 		return err
 	}
@@ -238,7 +294,11 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 	if err != nil {
 		return err
 	}
+	ready := make(chan struct{})
+	activationDone := make(chan struct{})
+	defer func() { stopLife(); <-activationDone }()
 	go func() {
+		defer close(activationDone)
 		if err := session.WaitReady(lifeCtx); err != nil {
 			failures <- errors.New("native session closed before authorization")
 			return
@@ -275,6 +335,10 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 			failures <- errors.New("cannot activate verified Telegram account")
 			return
 		}
+		if err := store.Replay(lifeCtx, accountID); err != nil {
+			failures <- errors.New("cannot replay persisted live updates")
+			return
+		}
 		if err := gate.Open(lifeCtx); err != nil {
 			failures <- errors.New("cannot commit initial live updates")
 			return
@@ -284,13 +348,61 @@ func run(ctx context.Context, logger *slog.Logger, accountID, root, library, mas
 			return
 		}
 		logger.Info("verified Telegram live mirror ready", "account_id", accountID)
+		close(ready)
 	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		return nil
+	case <-session.Done():
+		return errors.New("native session stopped")
+	case err := <-failures:
+		return err
+	}
+	adapter, err := tdadapter.New(session, index, tdadapter.Config{AccountID: accountID, FilesDirectory: workspace.FilesDir, MaxFileBytes: 1 << 30, Authorize: func(c context.Context) error {
+		if lost.Load() {
+			return sessionruntime.ErrLeaseLost
+		}
+		if session.State().Type != tdlib.Ready || !connected.Load() {
+			return &tdlib.RequestThrottled{After: 15 * time.Second}
+		}
+		return runtimeRepo.Check(c, lease)
+	}})
+	if err != nil {
+		return err
+	}
+	defer adapter.Close()
+	bus, err := natsbus.Open(cfg.NATS)
+	if err != nil {
+		return errors.New("cannot open account wakeup bus")
+	}
+	defer bus.Close()
+	notifier.Store(bus.Conn)
+	defer notifier.Store(nil)
+	storageCtx, cancelStorage := context.WithTimeout(lifeCtx, 15*time.Second)
+	objects, err := objectstore.Open(storageCtx, cfg.MinIO)
+	cancelStorage()
+	if err != nil {
+		return errors.New("cannot open media storage")
+	}
+	runner, err := accountsync.NewRunner(queue, adapter, objects, logger)
+	if err != nil {
+		return err
+	}
+	workerCtx, stopWorker := context.WithCancel(lifeCtx)
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- runner.Run(workerCtx, bus.Conn, bus.JetStream, connectionReady) }()
+	defer func() { stopWorker(); <-workerDone }()
+	logger.Info("account-routed history and media worker ready", "account_id", accountID)
 	select {
 	case <-ctx.Done():
 		return nil
 	case <-session.Done():
 		return errors.New("native session stopped")
 	case err := <-failures:
+		return err
+	case err := <-workerDone:
+		workerDone <- err
 		return err
 	}
 }

@@ -3,7 +3,9 @@ package media
 import (
 	"context"
 	"errors"
+	"github.com/JavoxirJava/telegram-gateway/internal/sessionkey"
 	"io"
+	"strings"
 )
 
 const ReadChunkSize = 64 * 1024
@@ -31,13 +33,14 @@ func (s *Service) Open(ctx context.Context, accountID, mediaID string, authorize
 	if err != nil {
 		return Content{}, err
 	}
-	expected, err := ObjectKey(accountID, mediaID)
+	baseKey, err := ObjectKey(accountID, mediaID)
 	if err != nil {
 		return Content{}, err
 	}
-	if item.DownloadStatus != "ready" || item.ObjectKey == nil || *item.ObjectKey != expected || item.FileSize == nil || *item.FileSize < 0 {
+	if item.DownloadStatus != "ready" || item.ObjectKey == nil || !validObjectVersion(baseKey, *item.ObjectKey) || item.FileSize == nil || *item.FileSize < 0 {
 		return Content{}, ErrNotReady
 	}
+	expected := *item.ObjectKey
 	check := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -113,4 +116,12 @@ func (r *checkedReader) Close() error {
 	}
 	r.closed = true
 	return r.source.Close()
+}
+
+func validObjectVersion(base, key string) bool {
+	if key == base {
+		return true
+	}
+	prefix := base + "/versions/"
+	return strings.HasPrefix(key, prefix) && sessionkey.ValidAccountID(strings.TrimPrefix(key, prefix))
 }

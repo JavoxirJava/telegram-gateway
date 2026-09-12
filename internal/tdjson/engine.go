@@ -392,7 +392,7 @@ func (e *Engine) Close(ctx context.Context) error {
 
 func allowed(method string) bool {
 	switch method {
-	case "getAuthorizationState", "setTdlibParameters", "setAuthenticationPhoneNumber", "checkAuthenticationCode", "checkAuthenticationPassword", "setAuthenticationEmailAddress", "checkAuthenticationEmailCode", "requestQrCodeAuthentication", "getMe", "getChat", "getUser", "loadChats", "getChatHistory", "getContacts", "getSupergroupMembers", "getBasicGroupFullInfo", "downloadFile", "getFile", "getOption":
+	case "getAuthorizationState", "setTdlibParameters", "setAuthenticationPhoneNumber", "checkAuthenticationCode", "checkAuthenticationPassword", "setAuthenticationEmailAddress", "checkAuthenticationEmailCode", "requestQrCodeAuthentication", "getMe", "getMessage", "getMessages", "getChat", "getUser", "loadChats", "getChatHistory", "getContacts", "getSupergroupMembers", "getBasicGroupFullInfo", "downloadFile", "getFile", "getOption":
 		return true
 	default:
 		return false

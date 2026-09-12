@@ -26,9 +26,16 @@ type Event struct {
 	Permanent    bool
 }
 
-type Normalizer struct{ chats map[int64]bool }
+type Normalizer struct {
+	chats     map[int64]bool
+	cloud     map[int64]bool
+	protected map[int64]bool
+	expiring  map[int64]bool
+}
 
-func New() *Normalizer { return &Normalizer{chats: make(map[int64]bool)} }
+func New() *Normalizer {
+	return &Normalizer{chats: make(map[int64]bool), cloud: make(map[int64]bool), protected: make(map[int64]bool), expiring: make(map[int64]bool)}
+}
 
 type messageWire struct {
 	ID       int64 `json:"id"`
@@ -44,16 +51,18 @@ type messageWire struct {
 	SelfDestruct json.RawMessage `json:"self_destruct_type"`
 	AutoDeleteIn float64         `json:"auto_delete_in"`
 	TTL          int             `json:"ttl"`
+	Protected    bool            `json:"has_protected_content"`
 }
 
 func (n *Normalizer) Decode(raw []byte) (Event, bool, error) {
 	var u struct {
 		Type string `json:"@type"`
 		Chat struct {
-			ID        int64  `json:"id"`
-			Title     string `json:"title"`
-			Protected bool   `json:"has_protected_content"`
-			Type      struct {
+			ID         int64  `json:"id"`
+			Title      string `json:"title"`
+			Protected  bool   `json:"has_protected_content"`
+			AutoDelete int64  `json:"message_auto_delete_time"`
+			Type       struct {
 				Type      string `json:"@type"`
 				IsChannel bool   `json:"is_channel"`
 			} `json:"type"`
@@ -68,6 +77,7 @@ func (n *Normalizer) Decode(raw []byte) (Event, bool, error) {
 		FromCache  bool            `json:"from_cache"`
 		Permanent  bool            `json:"is_permanent"`
 		Protected  bool            `json:"has_protected_content"`
+		AutoDelete int64           `json:"message_auto_delete_time"`
 	}
 	if json.Unmarshal(raw, &u) != nil {
 		return Event{}, false, errors.New("invalid live update JSON")
@@ -90,14 +100,32 @@ func (n *Normalizer) Decode(raw []byte) (Event, bool, error) {
 				kind = "channel"
 			}
 		}
-		n.chats[u.Chat.ID] = kind != "" && !u.Chat.Protected
+		n.cloud[u.Chat.ID] = kind != ""
+		n.protected[u.Chat.ID] = u.Chat.Protected
+		n.expiring[u.Chat.ID] = u.Chat.AutoDelete > 0
+		n.chats[u.Chat.ID] = kind != "" && !u.Chat.Protected && u.Chat.AutoDelete == 0
 		if !n.chats[u.Chat.ID] {
-			return Event{}, false, nil
+			if kind == "" {
+				return Event{}, false, nil
+			}
+			return Event{Kind: "blocked", ChatID: u.Chat.ID}, true, nil
 		}
 		return Event{Kind: "chat", ChatID: u.Chat.ID, ChatType: kind, Title: u.Chat.Title}, true, nil
-	case "updateChatHasProtectedContent":
-		n.chats[u.ChatID] = !u.Protected && n.chats[u.ChatID]
-		return Event{}, false, nil
+	case "updateChatHasProtectedContent", "updateChatMessageAutoDeleteTime":
+		if !n.cloud[u.ChatID] {
+			return Event{}, false, nil
+		}
+		if u.Type == "updateChatHasProtectedContent" {
+			n.protected[u.ChatID] = u.Protected
+		} else {
+			n.expiring[u.ChatID] = u.AutoDelete > 0
+		}
+		n.chats[u.ChatID] = !n.protected[u.ChatID] && !n.expiring[u.ChatID]
+		kind := "blocked"
+		if n.chats[u.ChatID] {
+			kind = "allowed"
+		}
+		return Event{Kind: kind, ChatID: u.ChatID}, true, nil
 	case "updateChatTitle":
 		e.Kind = "title"
 		e.Title = u.Title
@@ -105,7 +133,7 @@ func (n *Normalizer) Decode(raw []byte) (Event, bool, error) {
 		m := u.Message
 		e.ChatID = m.ChatID
 		e.MessageID = m.ID
-		if m.AutoDeleteIn > 0 || m.TTL > 0 || (len(m.SelfDestruct) > 0 && string(m.SelfDestruct) != "null") {
+		if m.Protected || m.AutoDeleteIn > 0 || m.TTL > 0 || (len(m.SelfDestruct) > 0 && string(m.SelfDestruct) != "null") {
 			return Event{}, false, nil
 		}
 		if m.ID <= 0 || m.Date <= 0 {
@@ -136,8 +164,13 @@ func (n *Normalizer) Decode(raw []byte) (Event, bool, error) {
 		var ok bool
 		var err error
 		e.ContentType, e.Content, e.Entities, ok, err = content(u.Content)
-		if err != nil || !ok {
+		if err != nil {
 			return Event{}, false, err
+		}
+		if !ok {
+			// A content transition may make a previously mirrored body unavailable.
+			e.Kind = "inaccessible"
+			e.MessageIDs = []int64{e.MessageID}
 		}
 	case "updateMessageEdited":
 		e.Kind = "edited"
@@ -151,6 +184,9 @@ func (n *Normalizer) Decode(raw []byte) (Event, bool, error) {
 			return Event{}, false, errors.New("deletion update exceeds batch limit")
 		}
 		e.Kind = "deleted"
+		if !u.Permanent {
+			e.Kind = "inaccessible"
+		}
 		e.MessageIDs = u.MessageIDs
 		e.Permanent = u.Permanent
 		for _, id := range e.MessageIDs {
@@ -164,7 +200,7 @@ func (n *Normalizer) Decode(raw []byte) (Event, bool, error) {
 	if !n.chats[e.ChatID] {
 		return Event{}, false, nil
 	}
-	if e.Kind != "deleted" && e.Kind != "title" && e.MessageID <= 0 {
+	if e.Kind != "deleted" && e.Kind != "inaccessible" && e.Kind != "title" && e.MessageID <= 0 {
 		return Event{}, false, errors.New("invalid live message identifier")
 	}
 	return e, true, nil
