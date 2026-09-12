@@ -63,7 +63,7 @@ func (r *Repository) Acquire(ctx context.Context, accountID, workerID, shardKey 
 		SELECT id, $2
 		FROM telegram_accounts
 		WHERE id = $1::uuid
-		  AND status = 'active'
+		  AND status IN ('pending', 'active')
 		ON CONFLICT (account_id) DO NOTHING`, accountID, shardKey); err != nil {
 		return Lease{}, false, fmt.Errorf("ensure session runtime row: %w", err)
 	}
@@ -82,7 +82,8 @@ func (r *Repository) Acquire(ctx context.Context, accountID, workerID, shardKey 
 		    updated_at = NOW()
 		WHERE account_id = $1::uuid
 		  AND desired_state = 'online'
-		  AND (lease_expires_at IS NULL OR lease_expires_at <= NOW() OR worker_id = $2)
+          AND EXISTS (SELECT 1 FROM telegram_accounts a WHERE a.id=account_id AND a.status IN ('pending','active'))
+		  AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
 		RETURNING account_id::text, worker_id, lease_token::text, generation, lease_expires_at`,
 		accountID, workerID, shardKey, ttl.Milliseconds(),
 	).Scan(&lease.AccountID, &lease.WorkerID, &lease.Token, &lease.Generation, &lease.ExpiresAt)
@@ -117,6 +118,8 @@ func (r *Repository) Renew(ctx context.Context, lease Lease, ttl time.Duration) 
 		  AND lease_token = $3::uuid
 		  AND generation = $5
 		  AND lease_expires_at > NOW()
+          AND desired_state='online'
+          AND EXISTS (SELECT 1 FROM telegram_accounts a WHERE a.id=account_id AND a.status IN ('pending','active'))
 		RETURNING lease_expires_at`,
 		lease.AccountID, lease.WorkerID, lease.Token, ttl.Milliseconds(), lease.Generation,
 	).Scan(&expiresAt)
@@ -166,7 +169,7 @@ func (r *Repository) SetObservedState(ctx context.Context, lease Lease, state Ob
 		WHERE account_id = $1::uuid
 		  AND worker_id = $2
 		  AND lease_token = $3::uuid
-		  AND generation = $4`,
+		  AND generation = $4 AND lease_expires_at > NOW() AND desired_state='online'`,
 		lease.AccountID, lease.WorkerID, lease.Token, lease.Generation, string(state), lastError,
 	)
 	if err != nil {

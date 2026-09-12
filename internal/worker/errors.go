@@ -47,6 +47,10 @@ func Permanent(err error) error {
 func RetryDelay(err error) (time.Duration, bool) {
 	var retry *RetryError
 	if !errors.As(err, &retry) || retry.After <= 0 {
+		var deferred interface{ RetryDelay() time.Duration }
+		if errors.As(err, &deferred) && deferred.RetryDelay() > 0 {
+			return deferred.RetryDelay(), true
+		}
 		return 0, false
 	}
 	return retry.After, true

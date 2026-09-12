@@ -33,11 +33,15 @@ func (p *Processor) handleChatHistory(ctx context.Context, envelope syncjob.Enve
 	if err != nil {
 		return p.failSync(ctx, lease, err)
 	}
-	items, err := session.GetChatHistory(ctx, payload.TelegramChatID, payload.BeforeMessageID, payload.RequestedPageSize)
+	page, err := session.GetChatHistory(ctx, payload.TelegramChatID, payload.BeforeMessageID, payload.RequestedPageSize)
 	if err != nil {
 		return p.failSync(ctx, lease, p.telegramError(ctx, envelope.AccountID, err))
 	}
 
+	if err := page.Validate(payload.BeforeMessageID, payload.RequestedPageSize); err != nil {
+		return p.failSync(ctx, lease, Permanent(err))
+	}
+	items := page.Items
 	var oldestMessageID *int64
 	var newestMessageID *int64
 	for _, item := range items {
@@ -104,10 +108,9 @@ func (p *Processor) handleChatHistory(ctx context.Context, envelope syncjob.Enve
 		}
 	}
 
-	nextBefore := int64(0)
-	if len(items) == payload.RequestedPageSize && oldestMessageID != nil {
-		nextBefore = *oldestMessageID
-		if nextBefore == payload.BeforeMessageID {
+	nextBefore := page.NextBeforeMessageID
+	if !page.Exhausted {
+		if payload.BeforeMessageID > 0 && nextBefore >= payload.BeforeMessageID {
 			return p.failSync(ctx, lease, Permanent(errors.New("Telegram history pagination did not advance")))
 		}
 		if err := p.publisher.EnqueueChatHistory(ctx, envelope.AccountID, syncjob.ChatHistoryPayload{
@@ -123,6 +126,8 @@ func (p *Processor) handleChatHistory(ctx context.Context, envelope syncjob.Enve
 	if err := p.syncStates.Progress(ctx, lease, map[string]any{
 		"before_message_id": nextBefore,
 		"page_count":        len(items),
+		"source_count":      page.SourceCount,
+		"exhausted":         page.Exhausted,
 	}, oldestMessageID, newestMessageID); err != nil {
 		return p.failSync(ctx, lease, err)
 	}

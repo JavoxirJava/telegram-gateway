@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/JavoxirJava/telegram-gateway/internal/dbtx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -26,12 +27,15 @@ type Contact struct {
 }
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool dbtx.DB
 }
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
+
+// NewTx binds every mutation to a transaction owned and fenced by the caller.
+func NewTx(tx dbtx.DB) *Repository { return &Repository{pool: tx} }
 
 func (r *Repository) Upsert(ctx context.Context, accountID string, contact Contact, phoneHash []byte) (string, error) {
 	accountID = strings.TrimSpace(accountID)

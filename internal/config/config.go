@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -10,12 +11,22 @@ import (
 )
 
 type Config struct {
+	MCP      MCPConfig
 	App      AppConfig
 	Postgres PostgresConfig
 	Redis    RedisConfig
 	NATS     NATSConfig
 	MinIO    MinIOConfig
 	Telegram TelegramConfig
+}
+
+type MCPConfig struct {
+	Enabled               bool
+	PublicURL             string
+	Issuer                string
+	IntrospectionClientID string
+	IntrospectionSecret   string
+	AllowedOrigins        []string
 }
 
 type AppConfig struct {
@@ -82,7 +93,30 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	mcpEnabled, err := boolEnv("MCP_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	introspectionSecret := os.Getenv("OAUTH_INTROSPECTION_SECRET")
+	if path := os.Getenv("OAUTH_INTROSPECTION_SECRET_FILE"); path != "" {
+		f, e := os.Open(path)
+		if e != nil {
+			return Config{}, errors.New("cannot open OAuth introspection secret")
+		}
+		info, e := f.Stat()
+		if e != nil || !info.Mode().IsRegular() || info.Size() > 4096 || info.Mode().Perm()&0077 != 0 {
+			f.Close()
+			return Config{}, errors.New("OAuth secret must be a small owner-only regular file")
+		}
+		b, e := io.ReadAll(io.LimitReader(f, 4097))
+		f.Close()
+		if e != nil || len(b) > 4096 {
+			return Config{}, errors.New("cannot read OAuth introspection secret")
+		}
+		introspectionSecret = strings.TrimSpace(string(b))
+	}
 	cfg := Config{
+		MCP: MCPConfig{Enabled: mcpEnabled, PublicURL: os.Getenv("MCP_PUBLIC_URL"), Issuer: os.Getenv("OAUTH_ISSUER"), IntrospectionClientID: os.Getenv("OAUTH_INTROSPECTION_CLIENT_ID"), IntrospectionSecret: introspectionSecret, AllowedOrigins: strings.Fields(os.Getenv("MCP_ALLOWED_ORIGINS"))},
 		App: AppConfig{
 			Environment:     env("APP_ENV", "development"),
 			HTTPAddr:        env("HTTP_ADDR", ":8080"),

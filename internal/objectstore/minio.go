@@ -5,11 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
-	"net/url"
-	"path"
 	"strings"
-	"time"
 
 	"github.com/JavoxirJava/telegram-gateway/internal/config"
 	"github.com/minio/minio-go/v7"
@@ -73,29 +69,18 @@ func (s *Store) Stat(ctx context.Context, objectKey string) (minio.ObjectInfo, e
 	return info, nil
 }
 
-func (s *Store) PresignedGet(ctx context.Context, objectKey string, expiry time.Duration, fileName string) (*url.URL, error) {
-	objectKey = strings.TrimSpace(objectKey)
-	if objectKey == "" {
-		return nil, errors.New("object key is required")
-	}
-	if expiry <= 0 {
-		return nil, errors.New("presigned url expiry must be positive")
-	}
-
-	params := make(url.Values)
-	fileName = strings.TrimSpace(fileName)
-	if fileName != "" {
-		fileName = path.Base(strings.ReplaceAll(fileName, "\\", "/"))
-		if disposition := mime.FormatMediaType("attachment", map[string]string{"filename": fileName}); disposition != "" {
-			params.Set("response-content-disposition", disposition)
-		}
-	}
-
-	presigned, err := s.client.PresignedGetObject(ctx, s.bucket, objectKey, expiry, params)
+// OpenReader stays server-side. The public API must never expose an S3 URL.
+func (s *Store) OpenReader(ctx context.Context, objectKey string) (io.ReadCloser, int64, error) {
+	object, err := s.Get(ctx, objectKey)
 	if err != nil {
-		return nil, fmt.Errorf("presign MinIO object: %w", err)
+		return nil, 0, err
 	}
-	return presigned, nil
+	info, err := object.Stat()
+	if err != nil {
+		_ = object.Close()
+		return nil, 0, fmt.Errorf("open MinIO object: %w", err)
+	}
+	return object, info.Size, nil
 }
 
 func (s *Store) ensureBucket(ctx context.Context) error {

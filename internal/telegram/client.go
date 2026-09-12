@@ -85,10 +85,19 @@ type Download struct {
 	FileName    string
 }
 
+// HistoryPage records source progress even when every message was excluded.
+// Exhausted is explicit; a short or fully filtered page is not EOF.
+type HistoryPage struct {
+	Items               []Message
+	SourceCount         int
+	NextBeforeMessageID int64
+	Exhausted           bool
+}
+
 type Session interface {
 	Profile(ctx context.Context) (Profile, error)
 	ListChats(ctx context.Context, cursor string, limit int) (ChatPage, error)
-	GetChatHistory(ctx context.Context, telegramChatID, beforeMessageID int64, limit int) ([]Message, error)
+	GetChatHistory(ctx context.Context, telegramChatID, beforeMessageID int64, limit int) (HistoryPage, error)
 	ListContacts(ctx context.Context) ([]Contact, error)
 	ListMembers(ctx context.Context, telegramChatID int64, cursor string, limit int) (MemberPage, error)
 	DownloadFile(ctx context.Context, telegramFileID int64) (Download, error)

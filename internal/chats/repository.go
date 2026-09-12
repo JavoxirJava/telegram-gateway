@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JavoxirJava/telegram-gateway/internal/dbtx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -30,12 +31,15 @@ type Chat struct {
 }
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool dbtx.DB
 }
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
+
+// NewTx binds every mutation to a transaction owned and fenced by the caller.
+func NewTx(tx dbtx.DB) *Repository { return &Repository{pool: tx} }
 
 func (r *Repository) Upsert(ctx context.Context, chat Chat) (string, error) {
 	if strings.TrimSpace(chat.AccountID) == "" {

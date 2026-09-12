@@ -22,3 +22,7 @@ coverage.out
 # TDLib local state (never commit sessions)
 /tdlib-data/
 /tdlib-files/
+/tdlib-agent
+/gatewayctl
+/gateway-migrate
+*.test
