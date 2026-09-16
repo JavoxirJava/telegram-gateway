@@ -11,6 +11,38 @@ TDLib connects to Telegram. PostgreSQL stores the mirror, MinIO stores media,
 Redis handles rate limits, and NATS JetStream schedules durable sync jobs.
 This is an independent project, not affiliated with Telegram or an AI provider.
 
+## Try the hosted MCP
+
+You can try the running gateway without installing the project:
+
+| Entry point | URL |
+|---|---|
+| MCP server | **https://tg-geteway.javohir-dev.uz/mcp** |
+| Telegram sign-in | https://tg-geteway.javohir-dev.uz/login |
+| Your account, tokens and connected AI clients | https://tg-geteway.javohir-dev.uz/account |
+
+1. Add the MCP server URL to your AI client's custom MCP/connector settings.
+   See [client examples below](#connect-an-ai-client).
+2. Start the client's OAuth connection. In the browser page it opens, sign in
+   with **your own Telegram account** and approve the displayed read scopes.
+   No personal Telegram API ID/hash is needed for this hosted trial.
+3. Return to the AI client and enable the connection. Try asking:
+   **"Use Telegram Gateway to show my profile and list my first 5 chats."**
+   This exercises `get_profile` and `list_chats`. Initial synchronization may
+   take time, so a newly connected account can initially return an empty list.
+4. Manage personal tokens or revoke an AI client's grant from your account page.
+   You can connect the same Telegram account from another AI client; each client
+   has its own grant and sees only the account it was authorized to access.
+
+Opening `/mcp` directly in a browser without authentication returns
+`401 unauthorized`; that is expected. Use an MCP client's OAuth flow, or a
+personal bearer token created on your account page.
+
+This is a hosted test instance; availability depends on the maintainer's server.
+Connecting starts synchronization onto that server, whose operator controls the
+stored data. Read [Before connecting an account](#before-connecting-an-account)
+before signing in. For your own installation, follow the Linux quick start below.
+
 ## What works
 
 - Phone/code, two-step verification, email verification and QR login through TDLib.
@@ -111,8 +143,10 @@ starting the API. The Quadlet installation above is the primary deployment path.
 
 ## Connect an AI client
 
-For a local client on the same machine, use `http://127.0.0.1:8086/mcp`.
-For a hosted client, use your configured HTTPS origin followed by `/mcp`.
+The examples below use the hosted test endpoint:
+**`https://tg-geteway.javohir-dev.uz/mcp`**.
+For your own installation, replace it with your configured HTTPS origin followed
+by `/mcp`, or `http://127.0.0.1:8086/mcp` for a local client on the same machine.
 
 Choose OAuth where supported. The client opens the gateway's sign-in page; sign
 in to your own Telegram account and approve the displayed read scopes. Enter
@@ -122,19 +156,19 @@ account-bound grant, so revoking one does not revoke the others.
 ### Codex CLI
 
 ```bash
-codex mcp add telegram-gateway --url http://127.0.0.1:8086/mcp
+codex mcp add telegram-gateway --url https://tg-geteway.javohir-dev.uz/mcp
 codex mcp login telegram-gateway
 ```
 
 ### Cursor
 
-Example `.cursor/mcp.json` for a local installation:
+Example `.cursor/mcp.json` for the hosted trial:
 
 ```json
 {
   "mcpServers": {
     "telegram-gateway": {
-      "url": "http://127.0.0.1:8086/mcp"
+      "url": "https://tg-geteway.javohir-dev.uz/mcp"
     }
   }
 }
@@ -148,7 +182,7 @@ Add to `~/.gemini/settings.json`, then run `/mcp auth telegram-gateway`:
 {
   "mcpServers": {
     "telegram-gateway": {
-      "httpUrl": "http://127.0.0.1:8086/mcp"
+      "httpUrl": "https://tg-geteway.javohir-dev.uz/mcp"
     }
   }
 }
@@ -159,8 +193,9 @@ Gemini web app.
 
 ### Claude and ChatGPT
 
-Where your client/account permits custom remote MCP connections, add your HTTPS
-MCP URL and authenticate with OAuth. Enable the connection in the conversation's
+Where your client/account permits custom remote MCP connections, add
+`https://tg-geteway.javohir-dev.uz/mcp` and authenticate with OAuth.
+Enable the connection in the conversation's
 tool menu if required. Product features and workspace policies vary; see the
 [current Claude guide](https://claude.com/docs/connectors/custom/remote-mcp) and
 [OpenAI connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt).
