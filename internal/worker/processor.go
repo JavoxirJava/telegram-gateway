@@ -18,7 +18,9 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/ratelimit"
 	"github.com/JavoxirJava/telegram-gateway/internal/syncjob"
 	"github.com/JavoxirJava/telegram-gateway/internal/syncstate"
+	"github.com/JavoxirJava/telegram-gateway/internal/tdlib"
 	"github.com/JavoxirJava/telegram-gateway/internal/telegram"
+	"github.com/jackc/pgx/v5"
 )
 
 type Publisher interface {
@@ -92,6 +94,12 @@ func NewProcessor(deps Dependencies) (*Processor, error) {
 func (p *Processor) Handle(ctx context.Context, envelope syncjob.Envelope) error {
 	if err := envelope.Validate(); err != nil {
 		return Permanent(err)
+	}
+	if _, err := p.accounts.GetActive(ctx, envelope.AccountID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Permanent(errors.New("Telegram account is unavailable"))
+		}
+		return err
 	}
 
 	switch envelope.Kind {
@@ -169,6 +177,10 @@ func (p *Processor) telegramError(ctx context.Context, accountID string, err err
 			return fmt.Errorf("persist Telegram FLOOD_WAIT cooldown after %v: %w", err, cooldownErr)
 		}
 		return RetryAfter(stored, err)
+	}
+	var tdErr *tdlib.Error
+	if errors.As(err, &tdErr) && (tdErr.Code == 400 || tdErr.Code == 403 || tdErr.Code == 404) {
+		return Permanent(err)
 	}
 	return err
 }

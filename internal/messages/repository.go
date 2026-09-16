@@ -88,14 +88,14 @@ func (r *Repository) Upsert(ctx context.Context, message Message) (string, error
 		DO UPDATE SET
 			sender_telegram_id = EXCLUDED.sender_telegram_id,
 			sender_chat_id = EXCLUDED.sender_chat_id,
-			message_type = EXCLUDED.message_type,
-			content = EXCLUDED.content,
-			content_entities = EXCLUDED.content_entities,
+			message_type = CASE WHEN COALESCE(EXCLUDED.edited_at, EXCLUDED.sent_at) >= COALESCE(messages.edited_at, messages.sent_at) THEN EXCLUDED.message_type ELSE messages.message_type END,
+			content = CASE WHEN COALESCE(EXCLUDED.edited_at, EXCLUDED.sent_at) >= COALESCE(messages.edited_at, messages.sent_at) THEN EXCLUDED.content ELSE messages.content END,
+			content_entities = CASE WHEN COALESCE(EXCLUDED.edited_at, EXCLUDED.sent_at) >= COALESCE(messages.edited_at, messages.sent_at) THEN EXCLUDED.content_entities ELSE messages.content_entities END,
 			reply_to_message_id = EXCLUDED.reply_to_message_id,
-			forward_info = EXCLUDED.forward_info,
-			raw_metadata = EXCLUDED.raw_metadata,
+			forward_info = CASE WHEN COALESCE(EXCLUDED.edited_at, EXCLUDED.sent_at) >= COALESCE(messages.edited_at, messages.sent_at) THEN EXCLUDED.forward_info ELSE messages.forward_info END,
+			raw_metadata = CASE WHEN COALESCE(EXCLUDED.edited_at, EXCLUDED.sent_at) >= COALESCE(messages.edited_at, messages.sent_at) THEN EXCLUDED.raw_metadata ELSE messages.raw_metadata END,
 			sent_at = EXCLUDED.sent_at,
-			edited_at = EXCLUDED.edited_at,
+			edited_at = GREATEST(EXCLUDED.edited_at, messages.edited_at),
 			updated_at = NOW()
 		RETURNING id::text`,
 		message.AccountID,
@@ -300,4 +300,13 @@ func nullableJSONString(value []byte) any {
 		return nil
 	}
 	return string(value)
+}
+
+// ApplyTombstones makes a late history page obey deletions received earlier.
+func (r *Repository) ApplyTombstones(ctx context.Context, accountID, chatID string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE messages m SET deleted=TRUE,deleted_at=t.deleted_at
+ FROM message_tombstones t JOIN chats c ON c.account_id=t.account_id AND c.telegram_chat_id=t.telegram_chat_id
+ WHERE m.account_id=$1::uuid AND m.chat_id=$2::uuid AND m.chat_id=c.id
+ AND m.telegram_message_id=t.telegram_message_id AND NOT m.deleted`, accountID, chatID)
+	return err
 }

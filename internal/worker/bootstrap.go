@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/JavoxirJava/telegram-gateway/internal/chats"
@@ -55,8 +56,23 @@ func (p *Processor) handleAccountBootstrap(ctx context.Context, envelope syncjob
 			return p.failSync(ctx, lease, err)
 		}
 
+		state, err := p.syncStates.Ensure(ctx, envelope.AccountID, &dbChatID, "history")
+		if err != nil {
+			return p.failSync(ctx, lease, err)
+		}
+		before, stopAt := int64(0), int64(0)
+		if v, ok := state.Cursor["before_message_id"].(float64); ok {
+			before = int64(v)
+		}
+		if v, ok := state.Cursor["before_message_id"].(json.Number); ok {
+			before, _ = v.Int64()
+		}
+		if before == 0 && state.NewestMessageID != nil {
+			stopAt = *state.NewestMessageID
+		}
 		if err := p.publisher.EnqueueChatHistory(ctx, envelope.AccountID, syncjob.ChatHistoryPayload{
-			ChatID:            dbChatID,
+			ChatID:          dbChatID,
+			BeforeMessageID: before, StopAfterMessageID: stopAt,
 			TelegramChatID:    item.TelegramChatID,
 			RequestedPageSize: 100,
 		}); err != nil {

@@ -112,7 +112,7 @@ func (p *Publisher) EnqueueChatHistory(ctx context.Context, accountID string, pa
 	if payload.RequestedPageSize > 100 {
 		payload.RequestedPageSize = 100
 	}
-	dedupKey := fmt.Sprintf("%s:%d:%d", payload.ChatID, payload.BeforeMessageID, payload.RequestedPageSize)
+	dedupKey := fmt.Sprintf("%s:%d:%d:%d", payload.ChatID, payload.BeforeMessageID, payload.RequestedPageSize, payload.StopAfterMessageID)
 	envelope, err := NewEnvelope(KindChatHistory, accountID, dedupKey, payload)
 	if err != nil {
 		return err

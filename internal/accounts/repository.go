@@ -49,8 +49,8 @@ func (r *Repository) CreatePending(ctx context.Context, userID string) (Account,
 	}
 
 	row := r.pool.QueryRow(ctx, `
-		INSERT INTO telegram_accounts (user_id, status)
-		VALUES ($1::uuid, 'pending')
+		INSERT INTO telegram_accounts (user_id, status, session_directory_id)
+		VALUES ($1::uuid, 'pending', gen_random_uuid())
 		RETURNING id::text, user_id::text, telegram_user_id, display_name, username,
 		          status, connected_at, disconnected_at, last_update_at, created_at, updated_at`, userID)
 	return scanAccount(row)

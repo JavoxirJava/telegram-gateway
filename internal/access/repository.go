@@ -30,6 +30,13 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+// LockGrant serializes OAuth token rotation and browser revocation for one
+// account/client grant. Acquire before locking its code or refresh-token rows.
+func LockGrant(ctx context.Context, tx pgx.Tx, accountID, clientID string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "oauth-grant:"+accountID+":"+clientID)
+	return err
+}
+
 func (r *Repository) CreateClient(ctx context.Context, userID, name, clientType string) (string, error) {
 	name = strings.TrimSpace(name)
 	clientType = strings.ToUpper(strings.TrimSpace(clientType))

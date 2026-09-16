@@ -111,3 +111,14 @@ func (s *Store) ensureBucket(ctx context.Context) error {
 	}
 	return nil
 }
+
+func (s *Store) Check(ctx context.Context) error {
+	exists, err := s.client.BucketExists(ctx, s.bucket)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errors.New("media bucket missing")
+	}
+	return nil
+}

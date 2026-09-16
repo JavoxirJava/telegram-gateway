@@ -1,0 +1,21 @@
+FROM docker.io/library/debian:bookworm-slim AS build
+ARG TDLIB_COMMIT=d1085f9cebc5a62379991ae1652673954f229c1f
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git cmake g++ make gperf libssl-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git init td && cd td && git remote add origin https://github.com/tdlib/td.git \
+    && git fetch --depth=1 origin ${TDLIB_COMMIT} && git checkout --detach FETCH_HEAD
+RUN cmake -S td -B build -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=OFF \
+    -DCMAKE_INSTALL_PREFIX=/opt/tdlib \
+    && cmake --build build --target tdjson -j 4 \
+    && mkdir -p /opt/tdlib/lib && cp -a build/libtdjson.so* /opt/tdlib/lib/
+
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata libssl3 zlib1g libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /opt/tdlib/lib/ /usr/local/lib/
+RUN ldconfig
+LABEL org.opencontainers.image.source="https://github.com/tdlib/td"
+LABEL telegram-gateway.tdlib.commit="d1085f9cebc5a62379991ae1652673954f229c1f"

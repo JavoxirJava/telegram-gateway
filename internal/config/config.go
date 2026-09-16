@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +20,8 @@ type Config struct {
 }
 
 type AppConfig struct {
+	PublicURL       string
+	AdminToken      string
 	Environment     string
 	HTTPAddr        string
 	ShutdownTimeout time.Duration
@@ -52,8 +55,10 @@ type MinIOConfig struct {
 }
 
 type TelegramConfig struct {
-	APIID   int64
-	APIHash string
+	DataDir    string
+	SessionKey string
+	APIID      int64
+	APIHash    string
 }
 
 func Load() (Config, error) {
@@ -85,6 +90,8 @@ func Load() (Config, error) {
 	cfg := Config{
 		App: AppConfig{
 			Environment:     env("APP_ENV", "development"),
+			PublicURL:       strings.TrimRight(env("PUBLIC_URL", "http://127.0.0.1:8086"), "/"),
+			AdminToken:      os.Getenv("GATEWAY_ADMIN_TOKEN"),
 			HTTPAddr:        env("HTTP_ADDR", ":8080"),
 			ShutdownTimeout: shutdownTimeout,
 		},
@@ -112,8 +119,10 @@ func Load() (Config, error) {
 			Bucket:    env("MINIO_BUCKET", "telegram-media"),
 		},
 		Telegram: TelegramConfig{
-			APIID:   telegramAPIID,
-			APIHash: os.Getenv("TELEGRAM_API_HASH"),
+			APIID:      telegramAPIID,
+			DataDir:    env("TDLIB_DATA_DIR", "/data/tdlib"),
+			SessionKey: os.Getenv("TELEGRAM_SESSION_KEY"),
+			APIHash:    os.Getenv("TELEGRAM_API_HASH"),
 		},
 	}
 
@@ -125,6 +134,14 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
+	u, err := url.Parse(c.App.PublicURL)
+	if err != nil || u == nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return errors.New("PUBLIC_URL must be an absolute origin URL")
+	}
+	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1")) {
+		return errors.New("PUBLIC_URL requires HTTPS outside localhost")
+	}
+
 	if strings.TrimSpace(c.App.HTTPAddr) == "" {
 		return errors.New("HTTP_ADDR cannot be empty")
 	}

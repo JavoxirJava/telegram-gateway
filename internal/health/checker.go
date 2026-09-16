@@ -31,6 +31,7 @@ type Report struct {
 
 type Checker struct {
 	targets []target
+	probes  map[string]func(context.Context) error
 	timeout time.Duration
 }
 
@@ -54,6 +55,19 @@ func New(cfg config.Config) *Checker {
 func (c *Checker) Check(ctx context.Context) Report {
 	dependencies := make([]Dependency, 0, len(c.targets))
 	status := StatusUp
+	for name, probe := range c.probes {
+		started := time.Now()
+		probeCtx, cancel := context.WithTimeout(ctx, c.timeout)
+		err := probe(probeCtx)
+		cancel()
+		d := Dependency{Name: name, Status: StatusUp, Latency: time.Since(started).Milliseconds()}
+		if err != nil {
+			d.Status = StatusDown
+			d.Error = "dependency check failed"
+			status = StatusDown
+		}
+		dependencies = append(dependencies, d)
+	}
 
 	for _, item := range c.targets {
 		dependency := c.checkTCP(ctx, item)
@@ -101,4 +115,8 @@ func natsAddress(rawURL string) string {
 		return rawURL[len(prefix):]
 	}
 	return rawURL
+}
+
+func NewProbes(probes map[string]func(context.Context) error) *Checker {
+	return &Checker{probes: probes, timeout: 1500 * time.Millisecond}
 }

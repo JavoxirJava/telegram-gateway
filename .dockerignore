@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+data
+tdlib-data
+tdlib-files
+bin
+dist
+tmp
+*.log
+*.out
+
+deploy/runtime
+deploy/VERIFICATION.md
+**/__pycache__
+*.pyc

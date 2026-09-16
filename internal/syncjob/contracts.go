@@ -48,10 +48,11 @@ type AccountBootstrapPayload struct {
 type ContactsSyncPayload struct{}
 
 type ChatHistoryPayload struct {
-	ChatID            string `json:"chat_id"`
-	TelegramChatID    int64  `json:"telegram_chat_id"`
-	BeforeMessageID   int64  `json:"before_message_id,omitempty"`
-	RequestedPageSize int    `json:"requested_page_size"`
+	StopAfterMessageID int64  `json:"stop_after_message_id,omitempty"`
+	ChatID             string `json:"chat_id"`
+	TelegramChatID     int64  `json:"telegram_chat_id"`
+	BeforeMessageID    int64  `json:"before_message_id,omitempty"`
+	RequestedPageSize  int    `json:"requested_page_size"`
 }
 
 type ChatMembersPayload struct {

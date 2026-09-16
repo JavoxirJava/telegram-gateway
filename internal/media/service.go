@@ -88,3 +88,37 @@ func ObjectKey(accountID, mediaID string) (string, error) {
 	}
 	return "accounts/" + accountID + "/media/" + mediaID, nil
 }
+
+func (s *Service) OpenRead(ctx context.Context, accountID, mediaID string) (io.ReadCloser, int64, string, string, error) {
+	item, err := s.repository.GetActive(ctx, accountID, mediaID)
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+	if item.DownloadStatus != "ready" || item.ObjectKey == nil {
+		return nil, 0, "", "", ErrNotReady
+	}
+	obj, err := s.store.Get(ctx, *item.ObjectKey)
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+	stat, err := obj.Stat()
+	if err != nil {
+		obj.Close()
+		return nil, 0, "", "", err
+	}
+	name := "download"
+	if item.FileName != nil {
+		name = *item.FileName
+	}
+	return obj, stat.Size, stat.ContentType, name, nil
+}
+func (s *Service) CheckReady(ctx context.Context, accountID, mediaID string) error {
+	item, err := s.repository.GetActive(ctx, accountID, mediaID)
+	if err != nil {
+		return err
+	}
+	if item.DownloadStatus != "ready" || item.ObjectKey == nil {
+		return ErrNotReady
+	}
+	return nil
+}

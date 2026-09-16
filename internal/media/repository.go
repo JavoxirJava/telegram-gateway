@@ -52,6 +52,10 @@ func (r *Repository) RegisterPending(ctx context.Context, messageID, mediaType s
 	var id string
 	var err error
 	if telegramFileID != nil {
+		conflict := `(message_id, media_type, telegram_file_id) WHERE telegram_file_id IS NOT NULL AND unique_file_key IS NULL`
+		if trimOptional(uniqueFileKey) != nil {
+			conflict = `(message_id, media_type, unique_file_key) WHERE unique_file_key IS NOT NULL`
+		}
 		err = r.pool.QueryRow(ctx, `
 			INSERT INTO message_media (
 				message_id, media_type, telegram_file_id, unique_file_key,
@@ -59,9 +63,9 @@ func (r *Repository) RegisterPending(ctx context.Context, messageID, mediaType s
 			) VALUES (
 				$1::uuid, $2, $3, $4, $5, $6, $7, 'pending'
 			)
-			ON CONFLICT (message_id, media_type, telegram_file_id)
-			WHERE telegram_file_id IS NOT NULL
+			ON CONFLICT `+conflict+`
 			DO UPDATE SET
+				telegram_file_id = EXCLUDED.telegram_file_id,
 				unique_file_key = COALESCE(EXCLUDED.unique_file_key, message_media.unique_file_key),
 				mime_type = COALESCE(EXCLUDED.mime_type, message_media.mime_type),
 				file_name = COALESCE(EXCLUDED.file_name, message_media.file_name),
@@ -186,6 +190,17 @@ func (r *Repository) GetForWorker(ctx context.Context, accountID, mediaID string
 		WHERE m.account_id = $1::uuid
 		  AND mm.id = $2::uuid`, strings.TrimSpace(accountID), strings.TrimSpace(mediaID))
 	return scanItem(row)
+}
+
+// DownloadSource uses stable message/chat identifiers to reload a file in the
+// current TDLib session. The integer file ID is not persistent across restarts.
+func (r *Repository) DownloadSource(ctx context.Context, accountID, mediaID string) (int64, int64, error) {
+	var chatID, messageID int64
+	err := r.pool.QueryRow(ctx, `SELECT c.telegram_chat_id,m.telegram_message_id
+		FROM active_message_media mm JOIN active_messages m ON m.id=mm.message_id
+		JOIN active_chats c ON c.id=m.chat_id
+		WHERE mm.account_id=$1::uuid AND mm.id=$2::uuid`, accountID, mediaID).Scan(&chatID, &messageID)
+	return chatID, messageID, err
 }
 
 type rowScanner interface {

@@ -15,7 +15,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -45,7 +45,7 @@ jobs:
 
       - name: Check formatting
         run: |
-          files=$(gofmt -l ./cmd ./internal)
+          files=$(gofmt -l ./cmd ./internal ./migrations)
           if [ -n "$files" ]; then
             echo "The following files need gofmt:"
             echo "$files"
@@ -64,6 +64,7 @@ jobs:
       - name: Start PostgreSQL 18
         run: |
           docker run -d --rm --name telegram-gateway-ci-postgres \
+            -p 127.0.0.1:15486:5432 \
             -e POSTGRES_DB=telegram_gateway \
             -e POSTGRES_USER=telegram_gateway \
             -e POSTGRES_PASSWORD=ci-password \
@@ -91,3 +92,33 @@ jobs:
             docker exec -i telegram-gateway-ci-postgres \
               psql -v ON_ERROR_STOP=1 -U telegram_gateway -d telegram_gateway < "$file"
           done
+
+      - name: Start isolated integration dependencies
+        run: |
+          docker exec telegram-gateway-ci-postgres \
+            createdb -U telegram_gateway telegram_gateway_test
+          docker run -d --rm --name telegram-gateway-ci-redis \
+            -p 127.0.0.1:16386:6379 redis:8.2.9-alpine
+          docker run -d --rm --name telegram-gateway-ci-nats \
+            -p 127.0.0.1:14286:4222 nats:2.14.6-alpine -js
+          docker run -d --rm --name telegram-gateway-ci-minio \
+            -p 127.0.0.1:19086:9000 \
+            -e MINIO_ROOT_USER=ci-gateway \
+            -e MINIO_ROOT_PASSWORD=ci-only-minio-password \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:19086/minio/health/ready \
+              && docker exec telegram-gateway-ci-redis redis-cli ping | grep -q PONG \
+              && (echo > /dev/tcp/127.0.0.1/14286); then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Test account isolation, OAuth and durable synchronization
+        env:
+          TEST_DATABASE_URL: postgres://telegram_gateway:ci-password@127.0.0.1:15486/telegram_gateway_test?sslmode=disable
+          TEST_MINIO_USER: ci-gateway
+          TEST_MINIO_PASSWORD: ci-only-minio-password
+        run: go test -race -count=1 ./internal/integration

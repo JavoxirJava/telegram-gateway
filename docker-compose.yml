@@ -1,70 +1,76 @@
+# Optional development stack. The PC deployment uses deploy/install.py (Quadlet).
+name: telegram-gateway-dev
+x-app-environment: &app-environment
+  POSTGRES_HOST: postgres
+  REDIS_ADDR: redis:6379
+  NATS_URL: nats://nats:4222
+  MINIO_ENDPOINT: minio:9000
+  HTTP_ADDR: :8080
+  PUBLIC_URL: http://127.0.0.1:18086
+  TDLIB_DATA_DIR: /data/tdlib
 services:
   postgres:
-    image: postgres:18.6-alpine
+    image: docker.io/library/postgres:18.6-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-telegram_gateway}
       POSTGRES_USER: ${POSTGRES_USER:-telegram_gateway}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run deploy/configure.py first}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-telegram_gateway} -d ${POSTGRES_DB:-telegram_gateway}"]
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s
       timeout: 3s
       retries: 20
-    restart: unless-stopped
-
   redis:
-    image: redis:8.2.9-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6379:6379"
+    image: docker.io/library/redis:8.2.9-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run deploy/configure.py first}
+    command: [/bin/sh, -c, 'exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"']
     volumes:
       - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    restart: unless-stopped
-
   nats:
-    image: nats:2.14.6-alpine
-    command: ["-js", "-sd", "/data", "-m", "8222"]
-    ports:
-      - "4222:4222"
-      - "8222:8222"
+    image: docker.io/library/nats:2.14.6-alpine
+    command: [-js, -sd, /data, -m, '8222']
     volumes:
       - nats_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz | grep -q ok"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    restart: unless-stopped
-
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-10-15T17-29-55Z
-    command: server /data --console-address ":9001"
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: [server, /data, --console-address, ':9001']
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-telegram-gateway}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-change-me-minio-secret}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Run deploy/configure.py first}
     volumes:
       - minio_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live >/dev/null || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
+  migrate:
+    image: localhost/telegram-gateway:local
+    entrypoint: [/usr/local/bin/gateway-migrate]
+    env_file: .env
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+  api:
+    image: localhost/telegram-gateway:local
+    env_file: .env
+    environment: *app-environment
+    ports:
+      - 127.0.0.1:18086:8080
+    volumes:
+      - tdlib_data:/data:U
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      nats:
+        condition: service_started
+      minio:
+        condition: service_started
     restart: unless-stopped
-
 volumes:
   postgres_data:
   redis_data:
   nats_data:
   minio_data:
+  tdlib_data:

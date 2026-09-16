@@ -63,7 +63,7 @@ func (r *Repository) Acquire(ctx context.Context, accountID, workerID, shardKey 
 		SELECT id, $2
 		FROM telegram_accounts
 		WHERE id = $1::uuid
-		  AND status = 'active'
+		  AND status IN ('pending', 'active')
 		ON CONFLICT (account_id) DO NOTHING`, accountID, shardKey); err != nil {
 		return Lease{}, false, fmt.Errorf("ensure session runtime row: %w", err)
 	}
@@ -82,7 +82,7 @@ func (r *Repository) Acquire(ctx context.Context, accountID, workerID, shardKey 
 		    updated_at = NOW()
 		WHERE account_id = $1::uuid
 		  AND desired_state = 'online'
-		  AND (lease_expires_at IS NULL OR lease_expires_at <= NOW() OR worker_id = $2)
+		  AND (lease_expires_at IS NULL OR lease_expires_at <= NOW() )
 		RETURNING account_id::text, worker_id, lease_token::text, generation, lease_expires_at`,
 		accountID, workerID, shardKey, ttl.Milliseconds(),
 	).Scan(&lease.AccountID, &lease.WorkerID, &lease.Token, &lease.Generation, &lease.ExpiresAt)

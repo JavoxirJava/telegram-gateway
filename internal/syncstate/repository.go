@@ -94,7 +94,7 @@ func (r *Repository) Acquire(ctx context.Context, stateID, owner string, ttl tim
 		    last_error = NULL,
 		    updated_at = NOW()
 		WHERE id = $1::uuid
-		  AND (lease_expires_at IS NULL OR lease_expires_at <= NOW() OR lease_owner = $2)
+		  AND (lease_expires_at IS NULL OR lease_expires_at <= NOW() )
 		RETURNING id::text, lease_owner, lease_token::text, generation, lease_expires_at`,
 		stateID, owner, ttl.Milliseconds(),
 	).Scan(&lease.StateID, &lease.Owner, &lease.Token, &lease.Generation, &lease.ExpiresAt)
@@ -119,8 +119,8 @@ func (r *Repository) Progress(ctx context.Context, lease Lease, cursor map[strin
 	result, err := r.pool.Exec(ctx, `
 		UPDATE sync_states
 		SET cursor = $5::jsonb,
-		    oldest_message_id = COALESCE($6, oldest_message_id),
-		    newest_message_id = COALESCE($7, newest_message_id),
+		    oldest_message_id = LEAST($6, oldest_message_id),
+		    newest_message_id = GREATEST($7, newest_message_id),
 		    last_synced_at = NOW(),
 		    updated_at = NOW()
 		WHERE id = $1::uuid

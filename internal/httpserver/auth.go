@@ -16,6 +16,9 @@ type principalContextKey struct{}
 
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.baseURL != "" {
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+s.baseURL+`/.well-known/oauth-protected-resource/mcp"`)
+		}
 		token, ok := bearerToken(r.Header.Get("Authorization"))
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -37,6 +40,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			return
 		}
 
+		w.Header().Del("WWW-Authenticate")
 		ctx := context.WithValue(r.Context(), principalContextKey{}, principal)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

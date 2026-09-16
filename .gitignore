@@ -22,3 +22,14 @@ coverage.out
 # TDLib local state (never commit sessions)
 /tdlib-data/
 /tdlib-files/
+
+# Generated local deployment credentials
+/deploy/runtime/
+
+# Local verification records and generated Python files
+/deploy/VERIFICATION.md
+__pycache__/
+*.py[cod]
+*.log
+*.dump
+*.sqlite*

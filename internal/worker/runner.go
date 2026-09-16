@@ -20,7 +20,7 @@ const (
 	consumerAckWait       = 2 * time.Minute
 	progressHeartbeat     = 30 * time.Second
 	genericRetryDelay     = 15 * time.Second
-	maxConsumerDeliveries = 20
+	maxConsumerDeliveries = -1
 )
 
 type JobHandler interface {

@@ -1,34 +1,24 @@
-.PHONY: run test fmt vet infra-up infra-down infra-logs migrate-up migrate-down
-
+.PHONY: run test fmt vet build deploy infra-up infra-down infra-logs migrate-up
+GO ?= go
 run:
-	go run ./cmd/api
-
+	systemctl --user start tgw-api.service tgw-tunnel.service
 test:
-	go test ./...
-
+	$(GO) test -race -count=1 ./...
 fmt:
-	gofmt -w ./cmd ./internal
-
+	$(GO) fmt ./...
 vet:
-	go vet ./...
-
+	$(GO) vet ./...
+build:
+	podman build --layers -f Dockerfile.tdlib -t localhost/telegram-gateway-tdlib:d1085f9 .
+	podman build --layers -t localhost/telegram-gateway:local .
+deploy:
+	python3 deploy/install.py
+	python3 deploy/tunnel.py
 infra-up:
-	docker compose up -d
-
+	python3 deploy/install.py
 infra-down:
-	docker compose down
-
+	systemctl --user stop tgw-tunnel tgw-api tgw-minio tgw-nats tgw-redis tgw-postgres
 infra-logs:
-	docker compose logs -f --tail=200
-
+	journalctl --user -u tgw-api -u tgw-postgres -u tgw-redis -u tgw-nats -u tgw-minio -f
 migrate-up:
-	@for file in $$(find migrations -maxdepth 1 -name '*.up.sql' | sort); do \
-		echo "Applying $$file"; \
-		docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < "$$file" || exit 1; \
-	done
-
-migrate-down:
-	@for file in $$(find migrations -maxdepth 1 -name '*.down.sql' | sort -r); do \
-		echo "Rolling back $$file"; \
-		docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < "$$file" || exit 1; \
-	done
+	podman run --rm --network tgw --env-file deploy/runtime/migrate.env --entrypoint /usr/local/bin/gateway-migrate localhost/telegram-gateway:local

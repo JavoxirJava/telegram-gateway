@@ -98,6 +98,20 @@ type Sessions interface {
 	Get(ctx context.Context, accountID string) (Session, error)
 }
 
+type LoginSession interface {
+	State() map[string]any
+	IsReady() bool
+	Profile(context.Context) (Profile, error)
+	Authorize(context.Context, string, string) error
+	Close()
+}
+
+// MessageFileResolver reloads a message attachment using its stable identity.
+// Adapters whose integer file IDs are session-local implement this interface.
+type MessageFileResolver interface {
+	ResolveMessageFile(ctx context.Context, chatID, messageID int64, uniqueFileKey, mediaType string) (int64, error)
+}
+
 type FloodWaitError struct {
 	RetryAfter time.Duration
 	Cause      error

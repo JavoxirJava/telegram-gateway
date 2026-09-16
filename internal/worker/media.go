@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/JavoxirJava/telegram-gateway/internal/syncjob"
+	"github.com/JavoxirJava/telegram-gateway/internal/telegram"
+	"github.com/jackc/pgx/v5"
 )
 
 const maxMediaDownloadAttempts = 5
@@ -23,8 +25,8 @@ func (p *Processor) handleMediaDownload(ctx context.Context, envelope syncjob.En
 	if item.MessageID != payload.MessageID {
 		return Permanent(errors.New("media job message id does not match stored media"))
 	}
-	if item.TelegramFileID == nil || *item.TelegramFileID != payload.TelegramFileID {
-		return Permanent(errors.New("media job Telegram file id does not match stored media"))
+	if item.TelegramFileID == nil {
+		return Permanent(errors.New("media has no Telegram file id"))
 	}
 	if item.DownloadStatus == "ready" {
 		return nil
@@ -38,6 +40,10 @@ func (p *Processor) handleMediaDownload(ctx context.Context, envelope syncjob.En
 
 	if err := p.beforeTelegram(ctx, envelope.AccountID, "download_file", p.policies.Media); err != nil {
 		return err
+	}
+	session, err := p.sessions.Get(ctx, envelope.AccountID)
+	if err != nil {
+		return RetryAfter(10*time.Second, err)
 	}
 	claimed, err := p.mediaRepo.ClaimDownloadRecoverable(ctx, payload.MediaID, maxMediaDownloadAttempts)
 	if err != nil {
@@ -54,12 +60,28 @@ func (p *Processor) handleMediaDownload(ctx context.Context, envelope syncjob.En
 		return RetryAfter(30*time.Second, errors.New("media download is currently owned by another worker"))
 	}
 
-	session, err := p.sessions.Get(ctx, envelope.AccountID)
-	if err != nil {
-		_ = p.mediaRepo.MarkFailed(ctx, payload.MediaID, err)
-		return err
+	fileID := *item.TelegramFileID
+	if resolver, ok := session.(telegram.MessageFileResolver); ok {
+		chatID, messageID, sourceErr := p.mediaRepo.DownloadSource(ctx, envelope.AccountID, item.ID)
+		if sourceErr != nil {
+			if errors.Is(sourceErr, pgx.ErrNoRows) {
+				sourceErr = Permanent(errors.New("media source message is unavailable"))
+			}
+			_ = p.mediaRepo.MarkFailed(ctx, item.ID, sourceErr)
+			return sourceErr
+		}
+		unique := ""
+		if item.UniqueFileKey != nil {
+			unique = *item.UniqueFileKey
+		}
+		fileID, err = resolver.ResolveMessageFile(ctx, chatID, messageID, unique, item.MediaType)
+		if err != nil {
+			processed := p.telegramError(ctx, envelope.AccountID, err)
+			_ = p.mediaRepo.MarkFailed(ctx, item.ID, processed)
+			return processed
+		}
 	}
-	download, err := session.DownloadFile(ctx, payload.TelegramFileID)
+	download, err := session.DownloadFile(ctx, fileID)
 	if err != nil {
 		processed := p.telegramError(ctx, envelope.AccountID, err)
 		_ = p.mediaRepo.MarkFailed(ctx, payload.MediaID, processed)

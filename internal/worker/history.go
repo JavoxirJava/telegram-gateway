@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/JavoxirJava/telegram-gateway/internal/messages"
 	"github.com/JavoxirJava/telegram-gateway/internal/syncjob"
 )
 
@@ -38,10 +37,15 @@ func (p *Processor) handleChatHistory(ctx context.Context, envelope syncjob.Enve
 		return p.failSync(ctx, lease, p.telegramError(ctx, envelope.AccountID, err))
 	}
 
+	reachedKnown := false
 	var oldestMessageID *int64
 	var newestMessageID *int64
 	for _, item := range items {
 		messageID := item.TelegramMessageID
+		if payload.StopAfterMessageID > 0 && messageID <= payload.StopAfterMessageID {
+			reachedKnown = true
+			break
+		}
 		if messageID == 0 || item.SentAt.IsZero() {
 			return p.failSync(ctx, lease, Permanent(errors.New("Telegram history returned an invalid message")))
 		}
@@ -54,67 +58,25 @@ func (p *Processor) handleChatHistory(ctx context.Context, envelope syncjob.Enve
 			newestMessageID = &value
 		}
 
-		dbMessageID, err := p.messages.Upsert(ctx, messages.Message{
-			AccountID:         envelope.AccountID,
-			ChatID:            chatID,
-			TelegramMessageID: item.TelegramMessageID,
-			SenderTelegramID:  item.SenderTelegramID,
-			SenderChatID:      item.SenderChatID,
-			MessageType:       item.Type,
-			Content:           item.Content,
-			ContentEntities:   item.Entities,
-			ReplyToMessageID:  item.ReplyToMessageID,
-			ForwardInfo:       item.ForwardInfo,
-			RawMetadata:       item.Metadata,
-			SentAt:            item.SentAt,
-			EditedAt:          item.EditedAt,
-		})
-		if err != nil {
+		if err := p.StoreMessage(ctx, envelope.AccountID, chatID, item); err != nil {
 			return p.failSync(ctx, lease, err)
-		}
-
-		for _, attachment := range item.Media {
-			var telegramFileID *int64
-			if attachment.TelegramFileID != 0 {
-				value := attachment.TelegramFileID
-				telegramFileID = &value
-			}
-			mediaID, err := p.mediaRepo.RegisterPending(
-				ctx,
-				dbMessageID,
-				attachment.Type,
-				telegramFileID,
-				optionalString(attachment.UniqueFileKey),
-				optionalString(attachment.MIMEType),
-				optionalString(attachment.FileName),
-				attachment.FileSize,
-			)
-			if err != nil {
-				return p.failSync(ctx, lease, err)
-			}
-			if telegramFileID != nil {
-				if err := p.publisher.EnqueueMediaDownload(ctx, envelope.AccountID, syncjob.MediaDownloadPayload{
-					MediaID:        mediaID,
-					MessageID:      dbMessageID,
-					TelegramFileID: *telegramFileID,
-				}); err != nil {
-					return p.failSync(ctx, lease, err)
-				}
-			}
 		}
 	}
 
 	nextBefore := int64(0)
-	if len(items) == payload.RequestedPageSize && oldestMessageID != nil {
+	// TDLib may return a short page while older messages still exist. Continue
+	// until an empty page instead of treating a short page as end-of-history.
+	if !reachedKnown && len(items) > 0 && oldestMessageID != nil {
 		nextBefore = *oldestMessageID
 		if nextBefore == payload.BeforeMessageID {
 			return p.failSync(ctx, lease, Permanent(errors.New("Telegram history pagination did not advance")))
 		}
 		if err := p.publisher.EnqueueChatHistory(ctx, envelope.AccountID, syncjob.ChatHistoryPayload{
-			ChatID:            chatID,
-			TelegramChatID:    payload.TelegramChatID,
-			BeforeMessageID:   nextBefore,
-			RequestedPageSize: payload.RequestedPageSize,
+			ChatID:             chatID,
+			StopAfterMessageID: payload.StopAfterMessageID,
+			TelegramChatID:     payload.TelegramChatID,
+			BeforeMessageID:    nextBefore,
+			RequestedPageSize:  payload.RequestedPageSize,
 		}); err != nil {
 			return p.failSync(ctx, lease, err)
 		}
