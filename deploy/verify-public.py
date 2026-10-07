@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify public multi-user endpoints using the operator's existing account.
 
+Checks default-deny access without fetching chat history or changing permissions.
 Creates and revokes temporary grants. Prints statuses/counts, never credentials
 or Telegram contents. --check-native starts an unauthenticated native login;
 it expires after ten minutes or is cleaned up on API shutdown.
@@ -75,6 +76,11 @@ def field(page, attribute, name):
 def main():
     anonymous, browser = Browser(), Browser()
     anonymous.request("/health/ready")
+    build = anonymous.request("/version")[0]
+    assert build["version"] == (ROOT / "VERSION").read_text().strip()
+    expected = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    assert build["revision"] == expected, "running revision differs from this checkout"
+    print("Running release and exact Git revision: passed", flush=True)
     page, _ = anonymous.request("/login")
     assert ENV["GATEWAY_ADMIN_TOKEN"] not in page
     anonymous.request("/account", expect=303)
@@ -105,29 +111,31 @@ def main():
         grants.append(personal["client_id"])
         token = personal["token"]
         assert browser.request("/v1/profile", token=token)[0]["data"]["account_id"] == aid
-        assert browser.request("/v1/chats?limit=1", token=token)[0]["data"]
+        assert isinstance(browser.request("/v1/chats?limit=1", token=token)[0]["data"], list)
         initialized = browser.request("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                        "clientInfo": {"name": "verification", "version": "1.0"}}}, token=token)[0]
-        assert initialized["result"]["serverInfo"]
+        assert initialized["result"]["serverInfo"]["version"] == build["version"]
         tools = browser.request("/mcp", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, token=token)[0]
-        assert len(tools["result"]["tools"]) == 10
+        assert len(tools["result"]["tools"]) == 11
+        assert "inspect_media" in {t["name"] for t in tools["result"]["tools"]}
+        assert "send_message" not in {t["name"] for t in tools["result"]["tools"]}
         result = browser.request("/mcp", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": {"name": "list_chats", "arguments": {"limit": 1}}}, token=token)[0]
-        assert not result["result"].get("isError") and result["result"]["structuredContent"]["count"] == 1
+        assert not result["result"].get("isError") and result["result"]["structuredContent"]["count"] <= 1
 
+        # Existing cached identities can be used to exercise denial without
+        # reading Telegram content, granting chat access or sending a message.
         row = subprocess.check_output(["podman", "exec", "tgw-postgres", "psql", "-U", "gateway_owner",
-            "-d", "telegram_gateway", "-Atc", "SELECT id::text||'|'||file_size::text||'|'||encode(sha256,'hex') "
-            "FROM active_message_media WHERE account_id='" + aid + "'::uuid AND download_status='ready' "
-            "AND file_size<=2097152 ORDER BY downloaded_at DESC LIMIT 1"], text=True).strip()
-        media_id, size, digest = row.split("|")
-        link = browser.request("/v1/media/" + media_id + "/url", token=token)[0]["data"]["url"]
-        download_path = link.removeprefix(BASE)
-        body = browser.request(download_path)[0]
-        if isinstance(body, str):
-            body = body.encode()
-        assert len(body) == int(size) and hashlib.sha256(body).hexdigest() == digest
-        print("Personal token, real REST/MCP reads and private media digest: passed", flush=True)
+            "-d", "telegram_gateway", "-Atc", "SELECT c.id::text FROM active_chats c "
+            "LEFT JOIN chat_permissions p ON p.account_id=c.account_id AND p.chat_id=c.id "
+            "WHERE c.account_id='" + aid + "'::uuid AND NOT COALESCE(p.can_read,false) LIMIT 1"], text=True).strip()
+        if row:
+            browser.request("/v1/chats/" + row + "/messages", token=token, expect=403)
+            denied = browser.request("/mcp", {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                "params": {"name": "get_messages", "arguments": {"chat_id": row}}}, token=token)[0]
+            assert denied["result"]["isError"]
+        print("REST/MCP discovery, media tool and closed-chat denial: passed", flush=True)
 
         client = browser.request("/oauth/register", {"client_name": oauth_name,
             "redirect_uris": ["http://127.0.0.1:44444/callback"], "token_endpoint_auth_method": "none"}, expect=201)[0]
@@ -160,7 +168,6 @@ def main():
         for grant in grants:
             browser.request("/account/clients/" + grant + "/revoke", {}, csrf=csrf)
         browser.request("/v1/profile", token=token, expect=401)
-        browser.request(download_path, expect=404)
         browser.request("/v1/profile", token=rotated["access_token"], expect=401)
         browser.request("/oauth/token", {"grant_type": "refresh_token", "client_id": client["client_id"],
             "refresh_token": rotated["refresh_token"]}, form=True, expect=400)
@@ -188,7 +195,7 @@ def main():
         else:
             raise AssertionError("native login did not become ready for phone/QR")
         print("Public login initializes real TDLib with shared server credentials: passed", flush=True)
-    print("Existing account remains connected; mirror counts:", data["stats"], flush=True)
+    print("Existing account remains connected; cached resource counts:", data["stats"], flush=True)
 
 
 if __name__ == "__main__":

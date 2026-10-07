@@ -364,7 +364,9 @@ REST/MCP/media isolation, OAuth consent binding, PKCE, token rotation/revocation
 races, durable updates, tombstones and media file identity across restarts.
 
 `python3 deploy/verify-public.py` is an optional live smoke test for a configured
-Quadlet installation with an active operator account and mirrored messages/media.
+Quadlet installation with an active operator account. It checks the deployed
+version/commit, OAuth, MCP tool discovery and denial for a cached closed chat.
+It does not grant chat permissions or fetch histories, media contents or send messages.
 It creates temporary grants and revokes them afterward. It requires no credentials
 in command arguments and prints only statuses/counts. Do not run it against a
 paused account; the native-ready checks intentionally require an active session.
