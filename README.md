@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/JavoxirJava/telegram-gateway)](https://github.com/JavoxirJava/telegram-gateway/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Current release: [v2.0.0](https://github.com/JavoxirJava/telegram-gateway/releases/tag/v2.0.0)** — chat permissions, image/video-frame inspection, controlled sending and a redesigned account panel.
+**Current release: [v2.0.1](https://github.com/JavoxirJava/telegram-gateway/releases/tag/v2.0.1)** — chat permissions, image/video-frame inspection, controlled sending and a redesigned account panel.
 Read the [changelog and upgrade notes](CHANGELOG.md) before updating: existing chats start with no AI access.
 
 A self-hosted Telegram gateway with a **permission-controlled REST API and MCP server**.
@@ -125,6 +125,9 @@ Create your own application at <https://my.telegram.org/apps>. Set
 
 ```bash
 python3 deploy/configure.py
+# Build the pinned MinIO dependency from source; the old registry image is unavailable.
+podman build --layers -f Dockerfile.minio \
+  -t quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z .
 podman build --layers -f Dockerfile.tdlib -t localhost/telegram-gateway-tdlib:d1085f9 .
 podman build --layers --build-arg VCS_REF="$(git rev-parse HEAD)" \
   --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

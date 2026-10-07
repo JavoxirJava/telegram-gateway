@@ -3,7 +3,7 @@ package buildinfo
 
 import "runtime/debug"
 
-const Version = "2.0.0"
+const Version = "2.0.1"
 
 // Revision and BuiltAt are set with linker flags for container release builds.
 var Revision = "unknown"

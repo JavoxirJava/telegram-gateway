@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.1](https://github.com/JavoxirJava/telegram-gateway/releases/tag/v2.0.1) — 2026-10-07
+
+- Fix CI and fresh-install instructions after the former MinIO registries stopped serving the pinned image. `Dockerfile.minio` builds the same upstream source release from its verified immutable commit.
+- Preserve the v2.0.0 feature set and upgrade requirements below. Existing running MinIO instances and storage volumes do not need to be replaced for this gateway update.
+- Runtime release metadata now reports `2.0.1`. This is the recommended release for new installations and upgrades.
+
 ## [2.0.0](https://github.com/JavoxirJava/telegram-gateway/releases/tag/v2.0.0) — 2026-10-07
 
 This release makes chat access opt-in and adds visual media inspection and controlled text sending.

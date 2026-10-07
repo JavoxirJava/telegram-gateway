@@ -16,7 +16,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -102,6 +102,9 @@ jobs:
               psql -v ON_ERROR_STOP=1 -U telegram_gateway -d telegram_gateway < "$file"
           done
 
+      - name: Build pinned MinIO test dependency from upstream source
+        run: docker build -f Dockerfile.minio -t telegram-gateway-ci-minio .
+
       - name: Start isolated integration dependencies
         run: |
           docker exec telegram-gateway-ci-postgres \
@@ -114,7 +117,7 @@ jobs:
             -p 127.0.0.1:19086:9000 \
             -e MINIO_ROOT_USER=ci-gateway \
             -e MINIO_ROOT_PASSWORD=ci-only-minio-password \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+            telegram-gateway-ci-minio server /data
           for i in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:19086/minio/health/ready \
               && docker exec telegram-gateway-ci-redis redis-cli ping | grep -q PONG \
