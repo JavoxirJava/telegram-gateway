@@ -44,8 +44,11 @@ func TestNormalizeScopes(t *testing.T) {
 	}
 }
 
-func TestRejectWriteScope(t *testing.T) {
-	if err := ValidateScopes([]Scope{"messages:send"}); err == nil {
-		t.Fatal("write scope must be rejected")
+func TestSendScopeAndRejectUnknownWriteScopes(t *testing.T) {
+	if err := ValidateScopes([]Scope{ScopeMessagesSend}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateScopes([]Scope{"messages:delete"}); err == nil {
+		t.Fatal("unknown write scope accepted")
 	}
 }

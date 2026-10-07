@@ -14,6 +14,7 @@ import (
 	"errors"
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
 	"github.com/JavoxirJava/telegram-gateway/internal/media"
+	"github.com/JavoxirJava/telegram-gateway/internal/telegram"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -23,6 +24,9 @@ func (s *Server) mediaTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("mediaID")
+	if _, ok := s.refreshRead(w, r, principal.AccountID, telegram.ReadRequest{Kind: "media", MediaID: id}); !ok {
+		return
+	}
 	if err := s.media.CheckReady(r.Context(), principal.AccountID, id); err != nil {
 		if errors.Is(err, media.ErrNotReady) {
 			writeError(w, 409, "media is not ready")
@@ -59,6 +63,9 @@ func (s *Server) downloadTicket(w http.ResponseWriter, r *http.Request) {
 	err := s.pool.QueryRow(r.Context(), `SELECT at.account_id::text,t.media_id::text,at.client_id::text FROM media_read_tickets t JOIN access_tokens at ON at.token_hash=t.token_hash JOIN gateway_clients gc ON gc.id=at.client_id AND gc.user_id=at.user_id JOIN telegram_accounts ta ON ta.id=at.account_id AND ta.user_id=at.user_id WHERE t.ticket_hash=$1 AND t.expires_at>NOW() AND at.revoked_at IS NULL AND (at.expires_at IS NULL OR at.expires_at>NOW()) AND gc.status='active' AND ta.status='active' AND 'media:read'=ANY(at.scopes)`, ticketHash[:]).Scan(&accountID, &mediaID, &clientID)
 	if err != nil {
 		writeError(w, 404, "link expired or unavailable")
+		return
+	}
+	if !s.allowMedia(w, r, accountID, mediaID) {
 		return
 	}
 	reader, _, contentType, name, err := s.media.OpenRead(r.Context(), accountID, mediaID)

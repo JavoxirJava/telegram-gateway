@@ -185,6 +185,9 @@ func (m *Manager) runAccount(ctx context.Context, id string) {
 		return nil
 	}
 	s, err := tdlib.Open(run, tdlib.Options{AccountID: storageID, APIID: m.config.APIID, APIHash: m.config.APIHash, MasterKey: m.key, Directory: m.config.DataDir, OnUpdate: func(event tdlib.Event) error {
+		if !m.config.AutoSync {
+			return nil
+		}
 		eventMu.Lock()
 		defer eventMu.Unlock()
 		if !verified {
@@ -239,7 +242,7 @@ func (m *Manager) runAccount(ctx context.Context, id string) {
 				return
 			}
 		}
-		if activated && time.Since(lastSync) > 30*time.Minute {
+		if m.config.AutoSync && activated && time.Since(lastSync) > 30*time.Minute {
 			if err := m.publisher.EnqueueAccountBootstrap(run, id, true); err == nil {
 				lastSync = time.Now()
 			}
@@ -278,9 +281,11 @@ func (m *Manager) runAccount(ctx context.Context, id string) {
 			m.mu.Lock()
 			m.ready[id] = true
 			m.mu.Unlock()
-			if err := m.publisher.EnqueueAccountBootstrap(run, id, true); err != nil {
-				m.logger.Error("enqueue Telegram bootstrap", "error", err)
-				return
+			if m.config.AutoSync {
+				if err := m.publisher.EnqueueAccountBootstrap(run, id, true); err != nil {
+					m.logger.Error("enqueue Telegram bootstrap", "error", err)
+					return
+				}
 			}
 			activated = true
 			lastSync = time.Now()
@@ -306,6 +311,9 @@ func (m *Manager) AccountList(ctx context.Context) ([]map[string]any, error) {
 	return out, rows.Err()
 }
 func (m *Manager) Sync(ctx context.Context, id string) error {
+	if !m.config.AutoSync {
+		return errors.New("background sync disabled; data refreshes on AI reads")
+	}
 	if _, err := m.Get(ctx, id); err != nil {
 		return err
 	}

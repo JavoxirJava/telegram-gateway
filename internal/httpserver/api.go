@@ -9,6 +9,8 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
 	"github.com/JavoxirJava/telegram-gateway/internal/audit"
 	"github.com/JavoxirJava/telegram-gateway/internal/messages"
+	"github.com/JavoxirJava/telegram-gateway/internal/telegram"
+	"github.com/google/uuid"
 )
 
 func (s *Server) listChats(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +50,13 @@ func (s *Server) searchChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.readSync != nil {
+		fresh, ok := s.refreshRead(w, r, principal.AccountID, telegram.ReadRequest{Kind: "search_chats", Query: query, Limit: limit})
+		if ok {
+			s.writeFreshChats(w, r, principal, fresh, "API_CHATS_SEARCH")
+		}
+		return
+	}
 	items, err := s.chats.SearchActive(r.Context(), principal.AccountID, query, limit)
 	if err != nil {
 		s.logger.Error("search chats failed", "error", err)
@@ -66,7 +75,7 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chatID := strings.TrimSpace(r.PathValue("chatID"))
-	if chatID == "" {
+	if _, err := uuid.Parse(chatID); err != nil {
 		writeError(w, http.StatusBadRequest, "chat id is required")
 		return
 	}
@@ -85,7 +94,26 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 		cursor = &decoded
 	}
 
-	page, err := s.messages.ListActivePageByChat(r.Context(), principal.AccountID, chatID, cursor, limit)
+	request := telegram.ReadRequest{Kind: "messages", ChatID: chatID, Limit: limit}
+	if cursor != nil {
+		request.BeforeMessageID = cursor.TelegramMessageID
+	}
+	fresh, ok := s.refreshRead(w, r, principal.AccountID, request)
+	if !ok {
+		return
+	}
+	var page messages.Page
+	var err error
+	if s.readSync != nil {
+		page.Items, err = s.messages.ListActiveByIDs(r.Context(), principal.AccountID, fresh.MessageIDs)
+		if err == nil && len(page.Items) > limit {
+			page.Items = page.Items[:limit]
+			last := page.Items[len(page.Items)-1]
+			page.NextCursor, err = messages.EncodeCursor(messages.Cursor{SentAt: last.SentAt, TelegramMessageID: last.TelegramMessageID})
+		}
+	} else {
+		page, err = s.messages.ListActivePageByChat(r.Context(), principal.AccountID, chatID, cursor, limit)
+	}
 	if err != nil {
 		s.logger.Error("list messages failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list messages")
@@ -120,7 +148,17 @@ func (s *Server) searchMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := s.messages.SearchActive(r.Context(), principal.AccountID, query, limit)
+	fresh, ok := s.refreshRead(w, r, principal.AccountID, telegram.ReadRequest{Kind: "search_messages", ChatID: r.URL.Query().Get("chat_id"), Query: query, Limit: limit})
+	if !ok {
+		return
+	}
+	var items []messages.Message
+	var err error
+	if s.readSync != nil {
+		items, err = s.messages.ListActiveByIDs(r.Context(), principal.AccountID, fresh.MessageIDs)
+	} else {
+		items, err = s.messages.SearchActiveChat(r.Context(), principal.AccountID, r.URL.Query().Get("chat_id"), query, limit)
+	}
 	if err != nil {
 		s.logger.Error("search messages failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to search messages")

@@ -122,6 +122,9 @@ func main() {
 		logger.Error("initialize sync processor", "error", err)
 		os.Exit(1)
 	}
+	if !cfg.Telegram.AutoSync {
+		deps.ReadSync = worker.NewOnDemand(processor, pool)
+	}
 	runner, err := worker.NewRunner(logger, bus.JetStream, processor, 4)
 	if err != nil {
 		logger.Error("initialize workers", "error", err)
@@ -135,7 +138,7 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
@@ -152,18 +155,24 @@ func main() {
 	}()
 	go func() {
 		defer workers.Done()
+		if !cfg.Telegram.AutoSync {
+			return
+		}
 		if err := runner.Run(ctx); err != nil {
 			errCh <- err
 		}
 	}()
 	go func() {
 		defer workers.Done()
+		if !cfg.Telegram.AutoSync {
+			return
+		}
 		if err := processor.RunUpdates(ctx, pool); err != nil {
 			errCh <- err
 		}
 	}()
 	go func() {
-		logger.Info("api server started", "addr", cfg.App.HTTPAddr, "env", cfg.App.Environment)
+		logger.Info("api server started", "addr", cfg.App.HTTPAddr, "env", cfg.App.Environment, "auto_sync", cfg.Telegram.AutoSync)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

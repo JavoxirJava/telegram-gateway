@@ -32,7 +32,7 @@ func (p *Processor) registerMedia(ctx context.Context, accountID, messageID stri
 		if err != nil {
 			return err
 		}
-		if fileID != 0 {
+		if fileID != 0 && ctx.Value(onDemandKey{}) == nil {
 			if err := p.publisher.EnqueueMediaDownload(ctx, accountID, syncjob.MediaDownloadPayload{MediaID: id, MessageID: messageID, TelegramFileID: fileID}); err != nil {
 				return err
 			}

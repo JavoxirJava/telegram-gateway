@@ -31,6 +31,8 @@ type Server struct {
 	limiter *ratelimit.Limiter
 }
 
+const oauthContentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"
+
 func New(pool *pgxpool.Pool, base string, auth *webauth.Service, limiter *ratelimit.Limiter) *Server {
 	return &Server{pool: pool, base: strings.TrimRight(base, "/"), auth: auth, limiter: limiter}
 }
@@ -62,8 +64,14 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if r.URL.Path == "/oauth/authorize" {
+			// no-referrer makes browsers submit this form with Origin: null,
+			// which fails consent's origin check. Keep same-origin form POSTs
+			// verifiable without sending a Referer to the OAuth redirect target.
+			w.Header().Set("Referrer-Policy", "same-origin")
+		}
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		w.Header().Set("Content-Security-Policy", oauthContentSecurityPolicy+"; form-action 'self'")
 		if r.URL.Path != "/oauth/authorize" {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -86,7 +94,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 	})
 }
 func allScopes() []string {
-	return []string{"profile:read", "chats:list", "chat:read", "messages:read", "messages:search", "contacts:read", "members:read", "media:read"}
+	return []string{"profile:read", "chats:list", "chat:read", "messages:read", "messages:search", "contacts:read", "members:read", "media:read", "messages:send"}
 }
 func (s *Server) metadata(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, 200, map[string]any{
@@ -274,11 +282,15 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: "tgw_oauth_" + id[:12], Value: csrf, Path: "/oauth/authorize", Secure: strings.HasPrefix(s.base, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	// Browsers also enforce form-action on the POST's redirect. Permit only
+	// the callback origin already validated against this client's registration.
+	callback, _ := url.Parse(redirect)
+	w.Header().Set("Content-Security-Policy", oauthContentSecurityPolicy+"; form-action 'self' "+callback.Scheme+"://"+callback.Host)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = consentTemplate.Execute(w, map[string]any{"ID": id, "CSRF": csrf, "Client": c.Name, "Redirect": redirect, "Scopes": scopes, "AccountID": principal.AccountID, "AccountName": principal.Name})
 }
 
-var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype html><html lang="uz"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Telegram Gateway — ruxsat</title><style>body{font:17px system-ui;max-width:600px;margin:8vh auto;padding:24px;background:#f3f6fa;color:#13263a}form{background:white;border-radius:16px;padding:28px}input,select,button{font:inherit;width:100%;box-sizing:border-box;padding:12px;margin:8px 0 20px}button{background:#176c91;color:white;border:0;border-radius:8px}code{overflow-wrap:anywhere}label{display:block}small{color:#41566c}</style><h1>Telegram Gateway</h1><form method="post" action="/oauth/authorize"><h2>{{.Client}} uchun ruxsat</h2><p>Ushbu dastur tanlangan akkauntning quyidagi ma’lumotlarini o‘qiy oladi:</p><ul>{{range .Scopes}}<li><code>{{.}}</code></li>{{end}}</ul><p>Qaytish manzili: <code>{{.Redirect}}</code></p><input type="hidden" name="request_id" value="{{.ID}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><p>Ulangan Telegram akkaunti: <strong>{{.AccountName}}</strong></p><input type="hidden" name="account_id" value="{{.AccountID}}"><button name="decision" value="allow">O‘qishga ruxsat berish</button><button name="decision" value="deny" formnovalidate>Bekor qilish</button><small>Ruxsat faqat yuqorida ko‘rsatilgan o‘z akkauntingizga beriladi. Ulanishlarni <a href="/account">shaxsiy sahifangizda</a> bekor qilishingiz mumkin.</small></form></html>`))
+var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype html><html lang="uz"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Telegram Gateway — ruxsat</title><style>body{font:17px system-ui;max-width:600px;margin:8vh auto;padding:24px;background:#f3f6fa;color:#13263a}form{background:white;border-radius:16px;padding:28px}input,select,button{font:inherit;width:100%;box-sizing:border-box;padding:12px;margin:8px 0 20px}button{background:#176c91;color:white;border:0;border-radius:8px}code{overflow-wrap:anywhere}label{display:block}small{color:#41566c}</style><h1>Telegram Gateway</h1><form method="post" action="/oauth/authorize"><h2>{{.Client}} uchun ruxsat</h2><p>Ushbu dastur quyidagi imkoniyatlarni so‘ramoqda. Faqat shaxsiy sahifangizda ruxsat berilgan chatlarni o‘qiydi. messages:send ruxsati yoqilgan chatlarga xabar yuborish imkonini beradi:</p><ul>{{range .Scopes}}<li><code>{{.}}</code></li>{{end}}</ul><p>Qaytish manzili: <code>{{.Redirect}}</code></p><input type="hidden" name="request_id" value="{{.ID}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><p>Ulangan Telegram akkaunti: <strong>{{.AccountName}}</strong></p><input type="hidden" name="account_id" value="{{.AccountID}}"><button name="decision" value="allow">Ulanishga ruxsat berish</button><button name="decision" value="deny" formnovalidate>Bekor qilish</button><small>Ruxsat faqat yuqorida ko‘rsatilgan o‘z akkauntingizga beriladi. Ulanishlarni <a href="/account">shaxsiy sahifangizda</a> bekor qilishingiz mumkin.</small></form></html>`))
 
 func (s *Server) consent(w http.ResponseWriter, r *http.Request) {
 	if s.auth == nil {

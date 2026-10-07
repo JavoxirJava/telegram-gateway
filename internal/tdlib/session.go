@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -205,11 +204,9 @@ func (s *Session) cachedUser(id int64) object { s.mu.RLock(); defer s.mu.RUnlock
 // Cursor encodes the loaded offset for main and archive chat lists. Each page
 // loads more chats and returns cached objects delivered before the RPC response.
 func (s *Session) ListChats(ctx context.Context, cursor string, limit int) (telegram.ChatPage, error) {
-	list, offset := 0, 0
-	if cursor != "" {
-		if _, err := fmt.Sscanf(cursor, "%d:%d", &list, &offset); err != nil || list < 0 || list > 1 || offset < 0 {
-			return telegram.ChatPage{}, errors.New("invalid chat cursor")
-		}
+	list, offset, err := telegram.ParseChatCursor(cursor)
+	if err != nil {
+		return telegram.ChatPage{}, err
 	}
 	if limit < 1 || limit > 100 {
 		limit = 100
@@ -252,7 +249,7 @@ func (s *Session) ListChats(ctx context.Context, cursor string, limit int) (tele
 		page.NextCursor = "1:0"
 	}
 	if end == offset && !exhausted {
-		return telegram.ChatPage{}, errors.New("Telegram chat list has not loaded yet")
+		return telegram.ChatPage{}, telegram.ErrChatListLoading
 	}
 	return page, nil
 }
@@ -393,6 +390,12 @@ func (s *Session) ResolveMessageFile(ctx context.Context, chatID, messageID int6
 func (s *Session) DownloadFile(ctx context.Context, id int64) (telegram.Download, error) {
 	v, err := s.rpc.call(ctx, object{"@type": "downloadFile", "file_id": id, "priority": 1, "offset": 0, "limit": 0, "synchronous": true})
 	if err != nil {
+		if ctx.Err() != nil {
+			// Cancelling the RPC alone does not stop TDLib's transfer.
+			stop, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, _ = s.rpc.call(stop, object{"@type": "cancelDownloadFile", "file_id": id, "only_if_pending": false})
+		}
 		return telegram.Download{}, err
 	}
 	local := obj(v["local"])

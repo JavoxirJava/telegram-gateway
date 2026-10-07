@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
+	"github.com/JavoxirJava/telegram-gateway/internal/telegram"
 )
 
 func (s *Server) listContacts(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +45,9 @@ func (s *Server) searchContacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, ok := s.refreshRead(w, r, principal.AccountID, telegram.ReadRequest{Kind: "contacts", Limit: limit}); !ok {
+		return
+	}
 	items, err := s.contacts.SearchActive(r.Context(), principal.AccountID, query, limit)
 	if err != nil {
 		s.logger.Error("search contacts failed", "error", err)

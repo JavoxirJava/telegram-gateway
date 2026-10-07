@@ -29,6 +29,8 @@ type ChatPage struct {
 	NextCursor string
 }
 
+var ErrChatListLoading = errors.New("Telegram chat list has not loaded yet")
+
 type Message struct {
 	TelegramMessageID int64
 	SenderTelegramID  *int64
@@ -98,6 +100,31 @@ type Sessions interface {
 	Get(ctx context.Context, accountID string) (Session, error)
 }
 
+// ReadRequest describes only the resource requested by an authenticated reader.
+type ReadRequest struct {
+	Kind, ChatID, MediaID, Query, Cursor string
+	Limit                                int
+	BeforeMessageID                      int64
+}
+type ReadResult struct {
+	MessageIDs []string
+	ChatIDs    []string
+	NextCursor string
+}
+type ReadSync interface {
+	Refresh(context.Context, string, ReadRequest) (ReadResult, error)
+}
+type LocatedMessage struct {
+	Chat    Chat
+	Message Message
+}
+type MessageSearcher interface {
+	SearchMessages(context.Context, string, int) ([]LocatedMessage, error)
+}
+type ChatSearcher interface {
+	SearchChats(context.Context, string, int) ([]Chat, error)
+}
+
 type LoginSession interface {
 	State() map[string]any
 	IsReady() bool
@@ -140,4 +167,12 @@ func AsFloodWait(err error) (time.Duration, bool) {
 		return 0, false
 	}
 	return flood.RetryAfter, true
+}
+
+// Optional capabilities keep read-only adapters usable.
+type ChatMessageSearcher interface {
+	SearchChatMessages(context.Context, int64, string, int) ([]Message, error)
+}
+type MessageSender interface {
+	SendText(context.Context, int64, string) (int64, error)
 }

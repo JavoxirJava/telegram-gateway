@@ -170,6 +170,9 @@ func TestGatewayIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO chat_permissions(account_id,chat_id,can_read) VALUES($1::uuid,$2::uuid,true)`, f.account, chatID); err != nil {
+		t.Fatal(err)
+	}
 	t.Run("REST and MCP", func(t *testing.T) {
 		status, body := f.request(t, "GET", "/v1/chats", f.token, nil)
 		if status != 200 || !bytes.Contains(body, []byte(chatID)) {
@@ -182,7 +185,7 @@ func TestGatewayIntegration(t *testing.T) {
 		}
 		defer session.Close()
 		tools, err := session.ListTools(ctx, nil)
-		if err != nil || len(tools.Tools) != 10 {
+		if err != nil || len(tools.Tools) != 11 {
 			t.Fatalf("tools=%v err=%v", tools, err)
 		}
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_messages", Arguments: map[string]any{"chat_id": chatID}})
@@ -224,7 +227,7 @@ func TestGatewayIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		status, body := f.request(t, "GET", "/v1/chats/"+otherChat+"/messages", f.token, nil)
-		if status != 200 || !bytes.Contains(body, []byte(`"count":0`)) {
+		if status != 403 {
 			t.Fatalf("tenant read: %d %s", status, body)
 		}
 	})

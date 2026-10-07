@@ -238,8 +238,17 @@ func TestPublicUsersAreIsolated(t *testing.T) {
 	if _, err := f.deps.Members.Upsert(ctx, bid, chatB, members.Member{TelegramPeerID: 123, FirstName: ptr("private marker B")}); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/v1/chats", "/v1/chats/search?q=private", "/v1/messages/search?q=private", "/v1/contacts", "/v1/contacts/search?q=private", "/v1/chats/" + chatB + "/messages", "/v1/chats/" + chatB + "/members"} {
-		raw, _ = a.request("GET", path, nil, bearerA, 200)
+	// New chats are denied until their own browser user grants access.
+	a.request("POST", "/account/chats/"+chatB+"/permissions", map[string]bool{"can_read": true}, ha, 404)
+	a.request("POST", "/account/chats/"+chatA+"/permissions", map[string]bool{"can_read": true}, nil, 403)
+	a.request("POST", "/account/chats/"+chatA+"/permissions", map[string]bool{"can_read": true}, ha, 200)
+	b.request("POST", "/account/chats/"+chatB+"/permissions", map[string]bool{"can_read": true}, hb, 200)
+	for _, path := range []string{"/v1/chats", "/v1/chats/search?q=private", "/v1/messages/search?q=private&chat_id=" + chatA, "/v1/contacts", "/v1/contacts/search?q=private", "/v1/chats/" + chatB + "/messages", "/v1/chats/" + chatB + "/members"} {
+		want := 200
+		if strings.Contains(path, chatB) {
+			want = 403
+		}
+		raw, _ = a.request("GET", path, nil, bearerA, want)
 		if bytes.Contains(raw, []byte("private marker B")) || bytes.Contains(raw, []byte(chatB)) {
 			t.Fatal("cross-user REST data leak", path)
 		}
@@ -267,7 +276,7 @@ func TestPublicUsersAreIsolated(t *testing.T) {
 	}
 	a.request("GET", "/v1/media/"+mediaB+"/url", nil, bearerA, 404)
 	b.request("GET", "/v1/media/"+mediaB+"/url", nil, bearerB, 200)
-	raw, _ = a.request("GET", "/v1/chats/"+chatB+"/media", nil, bearerA, 200)
+	raw, _ = a.request("GET", "/v1/chats/"+chatB+"/media", nil, bearerA, 403)
 	if bytes.Contains(raw, []byte(mediaB)) {
 		t.Fatal("cross-user media metadata leak")
 	}
@@ -301,6 +310,12 @@ func testPublicOAuthBinding(t *testing.T, f *fixture, a, b *testBrowser, aid, bi
 		t.Fatal("anonymous consent exposes an account")
 	}
 	raw, h = a.request("GET", "/oauth/authorize?"+q.Encode(), nil, nil, 200)
+	if h.Get("Referrer-Policy") != "same-origin" {
+		t.Fatal("consent page must preserve the browser's same-origin POST Origin")
+	}
+	if !strings.Contains(h.Get("Content-Security-Policy"), "; form-action 'self' http://127.0.0.1:44444") {
+		t.Fatal("consent page must allow redirecting the form to the validated callback")
+	}
 	if !bytes.Contains(raw, []byte("Public user A")) || bytes.Contains(raw, []byte("Public user B")) || bytes.Contains(raw, []byte(`name="password"`)) {
 		t.Fatal("consent must show only the signed-in account")
 	}
@@ -309,7 +324,10 @@ func testPublicOAuthBinding(t *testing.T, f *fixture, a, b *testBrowser, aid, bi
 	cookie := (&http.Response{Header: h}).Cookies()[0]
 	b.request("POST", "/oauth/authorize", form, map[string]string{"Cookie": cookie.Name + "=" + cookie.Value}, 400)
 	form.Set("account_id", aid)
-	_, h = a.request("POST", "/oauth/authorize", form, nil, 303)
+	for _, origin := range []string{"null", "https://untrusted.example"} {
+		a.request("POST", "/oauth/authorize", form, map[string]string{"Origin": origin}, 403)
+	}
+	_, h = a.request("POST", "/oauth/authorize", form, map[string]string{"Origin": a.base}, 303)
 	redirect, _ := url.Parse(h.Get("Location"))
 	if redirect.Query().Get("iss") != a.base {
 		t.Fatal("issuer missing")

@@ -55,6 +55,7 @@ type MinIOConfig struct {
 }
 
 type TelegramConfig struct {
+	AutoSync   bool
 	DataDir    string
 	SessionKey string
 	APIID      int64
@@ -62,6 +63,13 @@ type TelegramConfig struct {
 }
 
 func Load() (Config, error) {
+	autoSync, err := boolEnv("TELEGRAM_AUTO_SYNC", false)
+	if err != nil {
+		return Config{}, err
+	}
+	if autoSync {
+		return Config{}, fmt.Errorf("TELEGRAM_AUTO_SYNC must be false: chat access is on-demand only")
+	}
 	shutdownTimeout, err := durationEnv("SHUTDOWN_TIMEOUT", 10*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -119,6 +127,7 @@ func Load() (Config, error) {
 			Bucket:    env("MINIO_BUCKET", "telegram-media"),
 		},
 		Telegram: TelegramConfig{
+			AutoSync:   autoSync,
 			APIID:      telegramAPIID,
 			DataDir:    env("TDLIB_DATA_DIR", "/data/tdlib"),
 			SessionKey: os.Getenv("TELEGRAM_SESSION_KEY"),

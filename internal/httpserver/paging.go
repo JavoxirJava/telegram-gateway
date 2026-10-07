@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
+	"github.com/JavoxirJava/telegram-gateway/internal/telegram"
 	"github.com/google/uuid"
 	"net/http"
 	"time"
@@ -22,6 +23,10 @@ func (s *Server) paged(w http.ResponseWriter, r *http.Request, scope access.Scop
 	}
 	limit, ok := parseLimit(w, r)
 	if !ok {
+		return
+	}
+	if view == "active_chats" && s.readSync != nil {
+		s.demandChats(w, r, p, limit)
 		return
 	}
 	var cursorID any
@@ -62,6 +67,10 @@ func (s *Server) paged(w http.ResponseWriter, r *http.Request, scope access.Scop
 		filter = " AND $5::uuid IS NULL"
 	}
 	// View and order are selected from the fixed list above; user values remain parameters.
+	kind := map[string]string{"active_chats": "chats", "active_contacts": "contacts", "active_chat_members": "members", "active_message_media": "messages"}[view]
+	if _, ok := s.refreshRead(w, r, p.AccountID, telegram.ReadRequest{Kind: kind, ChatID: r.PathValue("chatID"), Limit: limit}); !ok {
+		return
+	}
 	query := fmt.Sprintf(`SELECT id::text,%s,to_jsonb(t)-ARRAY['phone_hash','object_key','telegram_file_id','unique_file_key','sha256','last_error','deleted','deleted_at'] FROM %s t WHERE account_id=$1::uuid AND ($2::uuid IS NULL OR (%s,id)<($3::timestamptz,$2::uuid)) %s ORDER BY %s DESC,id DESC LIMIT $4`, order, view, order, filter, order)
 	rows, err := s.pool.Query(r.Context(), query, p.AccountID, cursorID, cursorTime, limit+1, chat)
 	if err != nil {

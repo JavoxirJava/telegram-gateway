@@ -15,9 +15,9 @@ func DefaultPolicies() Policies {
 	return Policies{
 		MCPClient:       perMinute(60, 20),
 		User:            perMinute(120, 30),
-		TelegramAccount: perMinute(30, 10),
-		History:         perMinute(10, 3),
-		Search:          perMinute(5, 2),
+		TelegramAccount: perMinute(60, 15),
+		History:         perMinute(20, 6),
+		Search:          perMinute(10, 3),
 		Media:           perMinute(5, 2),
 	}
 }

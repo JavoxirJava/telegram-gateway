@@ -7,6 +7,7 @@ import (
 
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
 	"github.com/JavoxirJava/telegram-gateway/internal/media"
+	"github.com/JavoxirJava/telegram-gateway/internal/telegram"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -16,6 +17,9 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, ok := s.refreshRead(w, r, principal.AccountID, telegram.ReadRequest{Kind: "profile"}); !ok {
+		return
+	}
 	account, err := s.accounts.GetActive(r.Context(), principal.AccountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Telegram account not found")

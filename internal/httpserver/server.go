@@ -2,9 +2,11 @@ package httpserver
 
 import (
 	"encoding/json"
+	"github.com/JavoxirJava/telegram-gateway/internal/buildinfo"
 	"github.com/JavoxirJava/telegram-gateway/internal/gateway"
 	"github.com/JavoxirJava/telegram-gateway/internal/mcpserver"
 	"github.com/JavoxirJava/telegram-gateway/internal/oauth"
+	"github.com/JavoxirJava/telegram-gateway/internal/telegram"
 	"github.com/JavoxirJava/telegram-gateway/internal/webauth"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -27,6 +29,8 @@ import (
 )
 
 type Dependencies struct {
+	Sessions   telegram.Sessions
+	ReadSync   telegram.ReadSync
 	WebAuth    *webauth.Service
 	Pool       *pgxpool.Pool
 	Manager    *gateway.Manager
@@ -44,6 +48,8 @@ type Dependencies struct {
 }
 
 type Server struct {
+	sessions   telegram.Sessions
+	readSync   telegram.ReadSync
 	handler    http.Handler
 	webAuth    *webauth.Service
 	pool       *pgxpool.Pool
@@ -65,6 +71,7 @@ type Server struct {
 
 func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) *Server {
 	s := &Server{
+		readSync: deps.ReadSync, sessions: deps.Sessions,
 		pool: deps.Pool, manager: deps.Manager, baseURL: deps.BaseURL, adminToken: deps.AdminToken,
 		logger:   logger,
 		checker:  checker,
@@ -78,21 +85,25 @@ func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) *Serve
 		media:    deps.Media,
 		limiter:  deps.Limiter,
 	}
+	if s.sessions == nil && deps.Manager != nil {
+		s.sessions = deps.Manager
+	}
 	s.webAuth = deps.WebAuth
 	if s.webAuth == nil && deps.Manager != nil {
 		s.webAuth = webauth.New(deps.Pool, deps.Manager, deps.BaseURL, deps.Limiter, logger)
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, buildinfo.Info()) })
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.HandleFunc("GET /health/ready", s.ready)
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /v1/profile", s.profile)
-	api.HandleFunc("GET /v1/chats", func(w http.ResponseWriter, r *http.Request) {
-		s.paged(w, r, access.ScopeChatsList, "active_chats", false)
-	})
-	api.HandleFunc("GET /v1/chats/search", s.searchChats)
+	api.HandleFunc("POST /v1/chats/{chatID}/messages", s.sendMessage)
+	api.HandleFunc("GET /v1/media/{mediaID}/inspect", s.inspectMedia)
+	api.HandleFunc("GET /v1/chats", s.allowedChats)
+	api.HandleFunc("GET /v1/chats/search", s.allowedChats)
 	api.HandleFunc("GET /v1/chats/{chatID}/messages", s.listMessages)
 	api.HandleFunc("GET /v1/chats/{chatID}/members", func(w http.ResponseWriter, r *http.Request) {
 		s.paged(w, r, access.ScopeMembersRead, "active_chat_members", true)
@@ -106,7 +117,7 @@ func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) *Serve
 	api.HandleFunc("GET /v1/chats/{chatID}/media", func(w http.ResponseWriter, r *http.Request) {
 		s.paged(w, r, access.ScopeMediaRead, "active_message_media", true)
 	})
-	protectedAPI := s.authenticate(api)
+	protectedAPI := s.authenticate(s.chatAccess(api))
 	mux.Handle("/v1/", protectedAPI)
 	mux.HandleFunc("GET /media/{ticket}", s.downloadTicket)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/account", http.StatusSeeOther) })
@@ -128,7 +139,7 @@ func New(logger *slog.Logger, checker *health.Checker, deps Dependencies) *Serve
 	}
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		principal, _ := principalFromContext(r.Context())
-		return mcpserver.New(mcpserver.LocalRead(protectedAPI, r.Header.Get("Authorization"), r.RemoteAddr, r.UserAgent()), principal.Scopes)
+		return mcpserver.New(mcpserver.LocalRead(protectedAPI, r.Header.Get("Authorization"), r.RemoteAddr, r.UserAgent()), principal.Scopes, mcpserver.LocalWrite(protectedAPI, r.Header.Get("Authorization"), r.RemoteAddr, r.UserAgent()))
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 1 << 20, DisableLocalhostProtection: true})
 	// This server is intentionally behind the local Cloudflare proxy. Enforce the
 	// configured host/origin ourselves instead of trusting forwarded host headers.
@@ -154,6 +165,7 @@ func (s *Server) Close() {
 func (s *Server) live(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "up",
+		"build":  buildinfo.Info(),
 		"time":   time.Now().UTC(),
 	})
 }
@@ -175,6 +187,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 			http.Error(w, "invalid host", http.StatusForbidden)
 			return
 		}
+		w.Header().Set("X-Gateway-Version", buildinfo.Version)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")

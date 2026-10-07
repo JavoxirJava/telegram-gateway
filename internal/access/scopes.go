@@ -8,6 +8,7 @@ import (
 type Scope string
 
 const (
+	ScopeMessagesSend   Scope = "messages:send"
 	ScopeProfileRead    Scope = "profile:read"
 	ScopeChatsList      Scope = "chats:list"
 	ScopeChatRead       Scope = "chat:read"
@@ -19,6 +20,7 @@ const (
 )
 
 var allowedScopes = map[Scope]struct{}{
+	ScopeMessagesSend:   {},
 	ScopeProfileRead:    {},
 	ScopeChatsList:      {},
 	ScopeChatRead:       {},

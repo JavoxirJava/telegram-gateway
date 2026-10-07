@@ -14,7 +14,7 @@ func main() {
 	if base == "" || token == "" {
 		log.Fatal("GATEWAY_URL and GATEWAY_TOKEN are required")
 	}
-	s := mcpserver.New(mcpserver.RemoteRead(base, token), nil)
+	s := mcpserver.New(mcpserver.RemoteRead(base, token), nil, mcpserver.RemoteWrite(base, token))
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
 	}

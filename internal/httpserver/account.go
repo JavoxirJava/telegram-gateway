@@ -11,6 +11,7 @@ import (
 	"github.com/JavoxirJava/telegram-gateway/internal/access"
 	"github.com/JavoxirJava/telegram-gateway/internal/accounts"
 	"github.com/JavoxirJava/telegram-gateway/internal/audit"
+	"github.com/JavoxirJava/telegram-gateway/internal/buildinfo"
 	"github.com/JavoxirJava/telegram-gateway/internal/ratelimit"
 	"github.com/JavoxirJava/telegram-gateway/internal/webauth"
 	"github.com/google/uuid"
@@ -30,6 +31,9 @@ func (s *Server) registerAccount(mux *http.ServeMux) {
 		_, _ = w.Write([]byte(accountHTML))
 	})
 	mux.HandleFunc("GET /account/data", s.accountData)
+	mux.HandleFunc("GET /account/chats", s.accountChats)
+	mux.HandleFunc("POST /account/chats", s.accountChats)
+	mux.HandleFunc("POST /account/chats/{chatID}/permissions", s.accountPermission)
 	mux.HandleFunc("POST /account/token", s.accountToken)
 	mux.HandleFunc("POST /account/sync", s.accountSync)
 	mux.HandleFunc("POST /account/logout", s.accountLogout)
@@ -84,7 +88,7 @@ func (s *Server) accountData(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "Ulanishlarni olish imkoni bo‘lmadi.")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "name": p.Name, "csrf": p.CSRF, "authorization": s.manager.AccountState(p.AccountID), "stats": map[string]int64{"chats": chats, "messages": messages, "contacts": contacts, "media": media}, "clients": clients, "mcp_url": s.baseURL + "/mcp"})
+	writeJSON(w, 200, map[string]any{"build": buildinfo.Info(), "account_id": p.AccountID, "name": p.Name, "csrf": p.CSRF, "authorization": s.manager.AccountState(p.AccountID), "stats": map[string]int64{"chats": chats, "messages": messages, "contacts": contacts, "media": media}, "clients": clients, "sync_mode": map[bool]string{true: "on-demand", false: "automatic"}[s.readSync != nil], "mcp_url": s.baseURL + "/mcp"})
 }
 func (s *Server) accountToken(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.browserPrincipal(w, r)
@@ -134,6 +138,10 @@ func (s *Server) accountToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"token": token.Plaintext, "client_id": client, "expires_at": expires})
 }
 func (s *Server) accountSync(w http.ResponseWriter, r *http.Request) {
+	if s.readSync != nil {
+		writeError(w, 409, "Avtomatik sinxronlash o‘chirilgan. Ma’lumotlar AI so‘raganda yangilanadi.")
+		return
+	}
 	p, ok := s.browserPrincipal(w, r)
 	if !ok {
 		return

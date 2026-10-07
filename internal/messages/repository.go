@@ -207,6 +207,33 @@ func (r *Repository) SearchActive(ctx context.Context, accountID, query string, 
 	return scanMessages(rows)
 }
 
+func (r *Repository) SearchActiveChat(ctx context.Context, accountID, chatID, query string, limit int) ([]Message, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("search query is required")
+	}
+	limit = normalizeLimit(limit)
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text, account_id::text, chat_id::text, telegram_message_id,
+		       sender_telegram_id, sender_chat_id, message_type, content,
+		       content_entities, reply_to_message_id, forward_info, raw_metadata,
+		       sent_at, edited_at
+		FROM active_messages
+		WHERE account_id = $1::uuid AND chat_id=$4::uuid
+		  AND content ILIKE ('%' || $2 || '%') ESCAPE '\'
+		ORDER BY sent_at DESC, telegram_message_id DESC
+		LIMIT $3`,
+		accountID, escapeLike(query), limit, chatID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("search active messages: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMessages(rows)
+}
+
 type rowsScanner interface {
 	Next() bool
 	Scan(dest ...any) error

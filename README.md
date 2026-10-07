@@ -1,14 +1,18 @@
 # Unofficial Telegram Gateway
 
 [![CI](https://github.com/JavoxirJava/telegram-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/JavoxirJava/telegram-gateway/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/JavoxirJava/telegram-gateway)](https://github.com/JavoxirJava/telegram-gateway/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A self-hosted Telegram gateway with a **read-only REST API and MCP server**.
+**Current release: [v2.0.0](https://github.com/JavoxirJava/telegram-gateway/releases/tag/v2.0.0)** — chat permissions, image/video-frame inspection, controlled sending and a redesigned account panel.
+Read the [changelog and upgrade notes](CHANGELOG.md) before updating: existing chats start with no AI access.
+
+A self-hosted Telegram gateway with a **permission-controlled REST API and MCP server**.
 Search your synchronized messages, list chats and contacts, and retrieve message
 attachments from AI clients or your own scripts.
 
 TDLib connects to Telegram. PostgreSQL stores the mirror, MinIO stores media,
-Redis handles rate limits, and NATS JetStream schedules durable sync jobs.
+Redis handles rate limits. Legacy NATS jobs are retained but background sync is disabled.
 This is an independent project, not affiliated with Telegram or an AI provider.
 
 ## Try the hosted MCP
@@ -24,13 +28,17 @@ You can try the running gateway without installing the project:
 1. Add the MCP server URL to your AI client's custom MCP/connector settings.
    See [client examples below](#connect-an-ai-client).
 2. Start the client's OAuth connection. In the browser page it opens, sign in
-   with **your own Telegram account** and approve the displayed read scopes.
+   with **your own Telegram account** and approve the displayed scopes.
    No personal Telegram API ID/hash is needed for this hosted trial.
-3. Return to the AI client and enable the connection. Try asking:
+3. Open `/account`, click **Telegramdan yuklash**, select a chat, and enable
+   **Chatni o‘qish** and/or **Xabar yuborish**. Every chat is denied initially,
+   including chats cached before this upgrade. Loading this list fetches metadata
+   only; it does not read history.
+4. Return to the AI client and enable the connection. Try asking:
    **"Use Telegram Gateway to show my profile and list my first 5 chats."**
-   This exercises `get_profile` and `list_chats`. Initial synchronization may
-   take time, so a newly connected account can initially return an empty list.
-4. Manage personal tokens or revoke an AI client's grant from your account page.
+   This exercises `get_profile` and `list_chats`. Reads refresh requested data;
+   Telegram rate limits or an unready session produce a retryable error.
+5. Manage personal tokens or revoke an AI client's grant from your account page.
    You can connect the same Telegram account from another AI client; each client
    has its own grant and sees only the account it was authorized to access.
 
@@ -39,7 +47,7 @@ Opening `/mcp` directly in a browser without authentication returns
 personal bearer token created on your account page.
 
 This is a hosted test instance; availability depends on the maintainer's server.
-Connecting starts synchronization onto that server, whose operator controls the
+AI/API reads store requested data on that server, whose operator controls the
 stored data. Read [Before connecting an account](#before-connecting-an-account)
 before signing in. For your own installation, follow the Linux quick start below.
 
@@ -48,8 +56,8 @@ before signing in. For your own installation, follow the Linux quick start below
 - Phone/code, two-step verification, email verification and QR login through TDLib.
 - Multi-user sign-in: verified Telegram identities map to separate accounts;
   returning users recover their existing mirror.
-- Background history, contacts, visible members, media and live update sync.
-- REST pagination/search and 10 account-scoped MCP tools.
+- On-demand chat metadata, history, contacts, members, search and requested media.
+- REST pagination/search and 12 account-scoped MCP tools, including image/video-frame inspection and permission-controlled sending.
 - OAuth discovery, dynamic client registration, PKCE S256, rotating refresh
   tokens and per-client revocation; personal API tokens are also supported.
 - Private media download links, account isolation tests, audit chains,
@@ -58,11 +66,35 @@ before signing in. For your own installation, follow the Linux quick start below
 
 ## Before connecting an account
 
-**This version starts background synchronization when an account is connected.**
-It can copy accessible cloud-chat history, contacts, visible members and media
-onto the host. Large accounts can use significant disk space. Per-chat selection,
-storage quotas, automatic retention and a self-service delete-account workflow
-are not implemented yet. Stop the API service to stop all synchronization.
+**Automatic synchronization is disabled (`TELEGRAM_AUTO_SYNC=false`).**
+Starting with `TELEGRAM_AUTO_SYNC=true` now fails configuration validation.
+No gateway background history, live-event mirroring, or media downloads run.
+
+Only browser-authenticated account owners can change chat permissions at `/account`.
+Read and send permissions are independent and apply to all clients of that account;
+clients also need the appropriate OAuth/token scope. Bearer tokens cannot edit
+permissions. Revocation blocks subsequent REST/MCP reads and existing media links.
+A request already dispatched to Telegram cannot be recalled, and content already
+returned to an AI cannot be erased by revoking access.
+
+AI chat listing/search returns only approved cached chat metadata and does not
+query Telegram. Explicit browser **Telegramdan yuklash** fetches one metadata page;
+**Yana yuklash** fetches the next, and browser search finds chats by name. Message
+reads and searches query only an approved chat on demand, with a 45-second budget.
+`search_messages` now requires `chat_id`; account-wide message search is disabled.
+Attachments are fetched only when requested. Contacts remain separately controlled
+by `contacts:read`. MCP instructions prohibit automatic polling; the gateway cannot
+independently verify whether a client's individual tool call followed a human prompt.
+
+Local Telegram limits are 60 account operations/minute (burst 15), 20 history/list
+operations/minute per method (burst 6), and 10 searches/minute per method (burst 3).
+Attachment limits stay unchanged. Telegram FLOOD_WAIT cooldowns still apply.
+
+Existing cache and legacy queued jobs are retained. Background workers and update
+journal processing are paused and cannot be enabled through configuration.
+Telegram connections remain online and TDLib maintains its own session/cache;
+gateway live events are not mirrored into PostgreSQL in on-demand mode.
+Storage quotas, automatic retention and self-service account deletion are not implemented.
 
 The operator controls the host and its stored data. Keep `.env`, session keys,
 TDLib directories, backups and media private. AI clients receive the tool results
@@ -94,7 +126,9 @@ Create your own application at <https://my.telegram.org/apps>. Set
 ```bash
 python3 deploy/configure.py
 podman build --layers -f Dockerfile.tdlib -t localhost/telegram-gateway-tdlib:d1085f9 .
-podman build --layers -t localhost/telegram-gateway:local .
+podman build --layers --build-arg VCS_REF="$(git rev-parse HEAD)" \
+  --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -t localhost/telegram-gateway:local .
 python3 deploy/install.py
 ```
 
@@ -102,9 +136,10 @@ The service listens on **http://127.0.0.1:8086**. PostgreSQL, Redis, NATS and Mi
 have no published host ports. These scripts install one `tgw-*` stack per Linux
 user and preserve existing volumes.
 
+- `/version`: running release version, Git commit and build timestamp.
 - `/health/ready`: dependency checks.
-- `/login`: sign in to your Telegram account; this begins synchronization.
-- `/account`: sync counts, personal tokens and AI grants for that account.
+- `/login`: sign in to your Telegram account; background sync stays off by default.
+- `/account`: per-chat read/send permissions, personal tokens and AI grants.
 - `/manage`: operator panel; use `GATEWAY_ADMIN_TOKEN` from your local `.env`.
 - `/mcp`: Streamable HTTP MCP endpoint. A tokenless browser request returns 401
   with OAuth discovery information; add this URL to an MCP client.
@@ -149,7 +184,7 @@ For your own installation, replace it with your configured HTTPS origin followed
 by `/mcp`, or `http://127.0.0.1:8086/mcp` for a local client on the same machine.
 
 Choose OAuth where supported. The client opens the gateway's sign-in page; sign
-in to your own Telegram account and approve the displayed read scopes. Enter
+in to your own Telegram account and approve the displayed scopes. Enter
 Telegram codes/passwords only in that page. Each authorization gets a separate
 account-bound grant, so revoking one does not revoke the others.
 
@@ -217,12 +252,28 @@ Build the stdio bridge with `go build -o bin/gateway-mcp ./cmd/mcp-stdio`, or us
 
 `get_profile`, `list_chats`, `search_chats`, `get_messages`, `search_messages`,
 `list_contacts`, `search_contacts`, `list_chat_members`, `list_message_media`,
-`get_media_url`.
+`get_media_url`, `inspect_media`, `send_message`.
 
 Scopes: `profile:read`, `chats:list`, `chat:read`, `messages:read`,
-`messages:search`, `contacts:read`, `members:read`, `media:read`.
-The tool list is filtered by granted scopes. There are no MCP send, join or
-Telegram-delete tools. Results come from the stored mirror and may lag sync.
+`messages:search`, `messages:send`, `contacts:read`, `members:read`, `media:read`.
+The tool list is filtered by granted scopes. Existing grants must reconnect and
+consent to `messages:send` before sending; personal token creation offers an explicit
+send checkbox. There are no join or Telegram-delete tools.
+
+`inspect_media(media_id, second=0)` returns native MCP image content: a photo or
+one video frame at the requested timestamp. Request further timestamps to inspect
+other parts of a video. It does not transcribe audio or analyze an entire video.
+Image input is limited to 16 MiB / 40 megapixels; video input to 100 MiB, frame time
+to 0–86400 seconds, conversion to 20 seconds, and output to a 1280-pixel edge.
+The container includes FFmpeg; native installations need `ffmpeg` on PATH.
+
+`send_message(chat_id, text, request_id)` sends plain text (1–4096 characters).
+Use a fresh UUID `request_id` for a new message and the same UUID/text on retries.
+A durable reservation prevents automatic duplicate dispatch after timeouts or
+crashes. `accepted` means TDLib accepted it, not that final delivery was confirmed.
+An unknown/pending result must be checked in Telegram before starting a new send.
+Sending requires both `messages:send` scope and the chat's send permission.
+The account limit is a burst of 5 sends, refilling at 6 per minute.
 
 ## REST
 
@@ -231,15 +282,17 @@ All `/v1/` endpoints require `Authorization: Bearer <token>`.
 | Endpoint | Purpose |
 |---|---|
 | `GET /v1/profile` | Connected profile |
-| `GET /v1/chats` | Paginated active chats |
+| `GET /v1/chats` | Paginated approved chats and read/send flags |
 | `GET /v1/chats/search?q=...` | Search chat titles/usernames |
 | `GET /v1/chats/{chatID}/messages` | Paginated chat messages |
-| `GET /v1/messages/search?q=...` | Search stored message text |
+| `GET /v1/messages/search?q=...&chat_id=...` | Search one approved chat |
 | `GET /v1/contacts` | Paginated contacts |
 | `GET /v1/contacts/search?q=...` | Search contacts |
 | `GET /v1/chats/{chatID}/members` | Paginated visible members |
 | `GET /v1/chats/{chatID}/media` | Paginated attachment metadata |
 | `GET /v1/media/{mediaID}/url` | Five-minute download link |
+| `GET /v1/media/{mediaID}/inspect?second=0` | Photo or video frame as base64 JPEG |
+| `POST /v1/chats/{chatID}/messages` | Send `{ "text": "...", "request_id": "UUID" }` |
 
 IDs in these paths are gateway UUIDs returned by the API. Use `limit=1..100`
 and `cursor=<next_cursor>` for paginated lists. Search returns at most 100
@@ -255,7 +308,7 @@ journalctl --user -u tgw-api -n 100 --no-pager
 # Stop the API and all Telegram synchronization; retain stored data.
 systemctl --user stop tgw-api.service
 
-# Start it again; connected accounts configured online resume synchronization.
+# Start it again; default mode only refreshes data when requested.
 systemctl --user start tgw-api.service
 ```
 
@@ -263,6 +316,11 @@ Quadlets live in `~/.config/containers/systemd/tgw-*`. The installer enables
 linger so user services can start at boot. Persistent volumes are `tgw-postgres`,
 `tgw-redis`, `tgw-nats`, `tgw-minio` and `tgw-tdlib`. Never remove these volumes
 as an application update step.
+
+For this permission upgrade, rebuild the application image (includes FFmpeg),
+keep `TELEGRAM_AUTO_SYNC=false`, and run migration `000016` before starting the
+updated API. No existing chat is automatically approved; use `/account` to grant
+access. Reconnect clients that need the new send scope.
 
 Rebuild the application image and rerun `deploy/install.py` to update. Migrations
 run under an owner role; the runtime database role has data permissions but
