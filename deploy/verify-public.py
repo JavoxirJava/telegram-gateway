@@ -162,6 +162,25 @@ def main():
             "refresh_token": tokens["refresh_token"]}, form=True)[0]
         browser.request("/oauth/token", {"grant_type": "refresh_token", "client_id": client["client_id"],
             "refresh_token": tokens["refresh_token"]}, form=True, expect=400)
+        browser.request("/v1/profile", token=rotated["access_token"], expect=401)
+        browser.request("/oauth/token", {"grant_type": "refresh_token", "client_id": client["client_id"],
+            "refresh_token": rotated["refresh_token"]}, form=True, expect=400)
+        print("Refresh-token replay closes successor tokens: passed", flush=True)
+
+        # A fresh, separately consented grant verifies the OAuth revocation
+        # endpoint without relying on browser revocation to mask a failure.
+        page, _ = browser.request(path)
+        form = {k: field(page, "name", k) for k in ["request_id", "csrf", "account_id"]}
+        form["decision"] = "allow"
+        _, h = browser.request("/oauth/authorize", form, form=True, expect=303)
+        callback = urllib.parse.parse_qs(urllib.parse.urlparse(h["Location"]).query)
+        fresh = browser.request("/oauth/token", {"grant_type": "authorization_code", "client_id": client["client_id"],
+            "code": callback["code"][0], "redirect_uri": query["redirect_uri"], "code_verifier": verifier}, form=True)[0]
+        browser.request("/oauth/revoke", {"client_id": client["client_id"], "token": fresh["refresh_token"]}, form=True)
+        browser.request("/v1/profile", token=fresh["access_token"], expect=401)
+        browser.request("/oauth/token", {"grant_type": "refresh_token", "client_id": client["client_id"],
+            "refresh_token": fresh["refresh_token"]}, form=True, expect=400)
+        print("OAuth revocation closes related access and refresh tokens: passed", flush=True)
         clients = browser.request("/account/data")[0]["clients"]
         oauth_grant = next(c["id"] for c in clients if c["name"] == oauth_name)
         grants.append(oauth_grant)

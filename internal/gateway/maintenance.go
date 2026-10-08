@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"context"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"time"
+
+	"github.com/JavoxirJava/telegram-gateway/internal/oauth"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func Maintain(ctx context.Context, pool *pgxpool.Pool) {
@@ -15,6 +17,9 @@ func Maintain(ctx context.Context, pool *pgxpool.Pool) {
 			_, _ = pool.Exec(run, "DELETE FROM "+table+" WHERE expires_at < NOW()")
 			cancel()
 		}
+		run, cancel := context.WithTimeout(ctx, 10*time.Second)
+		_ = oauth.CleanupRegistrations(run, pool)
+		cancel()
 		select {
 		case <-ctx.Done():
 			return

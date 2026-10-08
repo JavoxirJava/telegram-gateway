@@ -30,11 +30,27 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-// LockGrant serializes OAuth token rotation and browser revocation for one
+// LockGrant serializes OAuth token rotation, replay detection and revocation for one
 // account/client grant. Acquire before locking its code or refresh-token rows.
 func LockGrant(ctx context.Context, tx pgx.Tx, accountID, clientID string) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "oauth-grant:"+accountID+":"+clientID)
 	return err
+}
+
+// RevokeGrant closes a single account/client authorization, including tokens
+// issued by a concurrent rotation. The caller must hold LockGrant in this tx.
+func RevokeGrant(ctx context.Context, tx pgx.Tx, accountID, clientID string) error {
+	for _, query := range []string{
+		`UPDATE gateway_clients SET status='disabled' WHERE id=$2::uuid AND user_id=(SELECT user_id FROM telegram_accounts WHERE id=$1::uuid)`,
+		`UPDATE access_tokens SET revoked_at=COALESCE(revoked_at,NOW()) WHERE account_id=$1::uuid AND client_id=$2::uuid`,
+		`UPDATE oauth_refresh_tokens SET revoked_at=COALESCE(revoked_at,NOW()) WHERE account_id=$1::uuid AND gateway_client_id=$2::uuid`,
+		`DELETE FROM oauth_codes WHERE account_id=$1::uuid AND gateway_client_id=$2::uuid`,
+	} {
+		if _, err := tx.Exec(ctx, query, accountID, clientID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) CreateClient(ctx context.Context, userID, name, clientType string) (string, error) {

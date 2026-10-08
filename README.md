@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/JavoxirJava/telegram-gateway)](https://github.com/JavoxirJava/telegram-gateway/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Current release: [v2.0.1](https://github.com/JavoxirJava/telegram-gateway/releases/tag/v2.0.1)** — chat permissions, image/video-frame inspection, controlled sending and a redesigned account panel.
+**Current release: [v2.0.2](https://github.com/JavoxirJava/telegram-gateway/releases/tag/v2.0.2)** — OAuth security fixes, chat permissions, image/video-frame inspection and controlled sending.
 Read the [changelog and upgrade notes](CHANGELOG.md) before updating: existing chats start with no AI access.
 
 A self-hosted Telegram gateway with a **permission-controlled REST API and MCP server**.
@@ -246,6 +246,18 @@ Create a personal token in `/account` for a client that accepts bearer tokens.
 Personal tokens last 30 days. OAuth access tokens last one hour and refresh
 tokens rotate with a 30-day lifetime. Revoke a grant in `/account` to stop that
 client's gateway access and refresh tokens. Browser sign-out alone does not do so.
+
+Reusing a consumed refresh token closes its entire authorization grant, including
+successor refresh tokens and access tokens. Clients must serialize refreshes;
+after an ambiguous refresh failure, reconnect instead of replaying the old token.
+`/oauth/revoke` also closes the entire grant, whether given its access token or
+refresh token. Separate consent grants are unaffected.
+
+Unused dynamic client registrations expire after 24 hours and may be evicted
+earlier when the 1,000-entry unused pool fills. Register again if an unused client
+ID becomes invalid. Registrations with pending consent or token records are
+protected from eviction; consented clients remain registered. Anonymous
+registrations cannot fill a permanent global quota and block new connections.
 
 Build the stdio bridge with `go build -o bin/gateway-mcp ./cmd/mcp-stdio`, or use
 `/usr/local/bin/gateway-mcp` inside the image. It reads `GATEWAY_URL` and

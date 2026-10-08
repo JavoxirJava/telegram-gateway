@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.0.2](https://github.com/JavoxirJava/telegram-gateway/releases/tag/v2.0.2) — 2026-10-08
+
+- Detect refresh-token replay and revoke the affected authorization grant, including successor tokens. Other consent grants remain active.
+- Revoke all related access/refresh tokens through `/oauth/revoke`, with the same transaction lock used by token rotation and browser revocation.
+- Replace the permanent global registration cap with a bounded, expiring pool of unused registrations. Preserve consented clients and in-progress authorization flows.
+- Add regression tests for replay, cross-client isolation, concurrent refresh/revocation, registration exhaustion, expiry and pending consent preservation.
+
+Upgrade: back up the database and apply migration `000017_oauth_security` before starting the new API. The installer handles migrations. Existing clients with token/code records are preserved. OAuth clients must serialize refreshes; a replay requires reconnecting. No chat permissions are changed by this upgrade.
+
 ## [2.0.1](https://github.com/JavoxirJava/telegram-gateway/releases/tag/v2.0.1) — 2026-10-07
 
 - Fix CI and fresh-install instructions after the former MinIO registries stopped serving the pinned image. `Dockerfile.minio` builds the same upstream source release from its verified immutable commit.

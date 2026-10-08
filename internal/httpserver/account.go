@@ -192,11 +192,7 @@ func (s *Server) accountRevoke(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Ulanish topilmadi.")
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `UPDATE access_tokens SET revoked_at=COALESCE(revoked_at,NOW()) WHERE client_id=$1::uuid AND account_id=$2::uuid AND user_id=$3::uuid`, id, p.AccountID, p.UserID); err != nil {
-		writeError(w, 500, "Ulanishni bekor qilib bo‘lmadi.")
-		return
-	}
-	if _, err = tx.Exec(r.Context(), `UPDATE oauth_refresh_tokens SET revoked_at=COALESCE(revoked_at,NOW()) WHERE gateway_client_id=$1::uuid AND account_id=$2::uuid`, id, p.AccountID); err != nil {
+	if err = access.RevokeGrant(r.Context(), tx, p.AccountID, id); err != nil {
 		writeError(w, 500, "Ulanishni bekor qilib bo‘lmadi.")
 		return
 	}

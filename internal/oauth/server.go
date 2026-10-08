@@ -116,7 +116,7 @@ type client struct {
 
 func (s *Server) getClient(ctx context.Context, id string) (client, error) {
 	var c client
-	err := s.pool.QueryRow(ctx, `SELECT id,name,redirect_uris,secret_hash,auth_method FROM oauth_clients WHERE id=$1`, id).Scan(&c.ID, &c.Name, &c.Redirects, &c.Secret, &c.Method)
+	err := s.pool.QueryRow(ctx, `SELECT id,name,redirect_uris,secret_hash,auth_method FROM oauth_clients WHERE id=$1 AND (activated_at IS NOT NULL OR created_at>NOW()-interval '24 hours')`, id).Scan(&c.ID, &c.Name, &c.Redirects, &c.Secret, &c.Method)
 	return c, err
 }
 func validRedirect(raw string) bool {
@@ -200,13 +200,24 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		secret = randomToken()
 		secretHash = hash(secret)
 	}
-	var count int
-	if err := s.pool.QueryRow(r.Context(), `SELECT count(*) FROM oauth_clients`).Scan(&count); err != nil || count >= 1000 {
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
 		fail(w, 503, "temporarily_unavailable")
 		return
 	}
-	if _, err := s.pool.Exec(r.Context(), `INSERT INTO oauth_clients(id,name,redirect_uris,secret_hash,auth_method) VALUES($1,$2,$3,$4,$5)`, id, in.Name, in.Redirects, secretHash, in.Method); err != nil {
+	defer tx.Rollback(context.Background())
+	// Keep a bounded pool of unused registrations, making room for new clients
+	// without letting anonymous registrations evict authorized clients.
+	if err := pruneRegistrations(r.Context(), tx, 999); err != nil {
+		fail(w, 503, "temporarily_unavailable")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `INSERT INTO oauth_clients(id,name,redirect_uris,secret_hash,auth_method) VALUES($1,$2,$3,$4,$5)`, id, in.Name, in.Redirects, secretHash, in.Method); err != nil {
 		fail(w, 500, "server_error")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		fail(w, 503, "temporarily_unavailable")
 		return
 	}
 	out := map[string]any{"client_id": id, "client_name": in.Name, "redirect_uris": in.Redirects, "token_endpoint_auth_method": in.Method, "grant_types": []string{"authorization_code", "refresh_token"}, "response_types": []string{"code"}, "client_id_issued_at": time.Now().Unix()}
@@ -276,9 +287,28 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, webauth.LoginURL(r.URL.RequestURI()), http.StatusSeeOther)
 		return
 	}
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		fail(w, 503, "temporarily_unavailable")
+		return
+	}
+	defer tx.Rollback(context.Background())
+	if lockRegistrations(r.Context(), tx) != nil {
+		fail(w, 503, "temporarily_unavailable")
+		return
+	}
+	var registered bool
+	if err = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM oauth_clients WHERE id=$1 AND (activated_at IS NOT NULL OR created_at>NOW()-interval '24 hours'))`, c.ID).Scan(&registered); err != nil || !registered {
+		fail(w, 400, "invalid_client")
+		return
+	}
 	id, csrf := randomToken(), randomToken()
-	if _, err := s.pool.Exec(r.Context(), `INSERT INTO oauth_requests(id,client_id,redirect_uri,state,challenge,scopes,csrf_hash,expires_at,user_id,account_id) VALUES($1,$2,$3,$4,$5,$6,$7,NOW()+interval '10 minutes',$8::uuid,$9::uuid)`, id, c.ID, redirect, q.Get("state"), q.Get("code_challenge"), scopes, hash(csrf), principal.UserID, principal.AccountID); err != nil {
+	if _, err := tx.Exec(r.Context(), `INSERT INTO oauth_requests(id,client_id,redirect_uri,state,challenge,scopes,csrf_hash,expires_at,user_id,account_id) VALUES($1,$2,$3,$4,$5,$6,$7,NOW()+interval '10 minutes',$8::uuid,$9::uuid)`, id, c.ID, redirect, q.Get("state"), q.Get("code_challenge"), scopes, hash(csrf), principal.UserID, principal.AccountID); err != nil {
 		fail(w, 500, "server_error")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		fail(w, 503, "temporarily_unavailable")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: "tgw_oauth_" + id[:12], Value: csrf, Path: "/oauth/authorize", Secure: strings.HasPrefix(s.base, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
@@ -346,6 +376,16 @@ func (s *Server) consent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(context.Background())
+	// Pin the registration permanently only after authenticated consent. Pending
+	// consent requests also protect their registration from anonymous eviction.
+	if lockRegistrations(r.Context(), tx) != nil {
+		fail(w, 503, "temporarily_unavailable")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `UPDATE oauth_clients SET activated_at=COALESCE(activated_at,NOW()) WHERE id=$1`, clientID); err != nil {
+		fail(w, 500, "server_error")
+		return
+	}
 	tag, err := tx.Exec(r.Context(), `DELETE FROM oauth_requests WHERE id=$1 AND expires_at>NOW()`, id)
 	if err != nil || tag.RowsAffected() != 1 {
 		fail(w, 400, "invalid_request")
@@ -449,8 +489,31 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		}
 		_, err = tx.Exec(r.Context(), `DELETE FROM oauth_codes WHERE code_hash=$1`, hash(r.Form.Get("code")))
 	case "refresh_token":
-		err = tx.QueryRow(r.Context(), `SELECT account_id::text,gateway_client_id::text,scopes FROM oauth_refresh_tokens WHERE token_hash=$1 AND client_id=$2 AND expires_at>NOW() AND revoked_at IS NULL FOR UPDATE`, hash(r.Form.Get("refresh_token")), c.ID).Scan(&account, &gatewayClient, &scopes)
+		var revoked, expired bool
+		err = tx.QueryRow(r.Context(), `SELECT account_id::text,gateway_client_id::text,scopes,revoked_at IS NOT NULL,expires_at<=NOW() FROM oauth_refresh_tokens WHERE token_hash=$1 AND client_id=$2 FOR UPDATE`, hash(r.Form.Get("refresh_token")), c.ID).Scan(&account, &gatewayClient, &scopes, &revoked, &expired)
 		if err != nil {
+			fail(w, 400, "invalid_grant")
+			return
+		}
+		if revoked {
+			// A consumed token proves that this grant has been replayed. Rejecting
+			// only the old token would leave an attacker's successor usable.
+			if err = access.RevokeGrant(r.Context(), tx, account, gatewayClient); err != nil {
+				fail(w, 503, "temporarily_unavailable")
+				return
+			}
+			if err = tx.Commit(r.Context()); err != nil {
+				fail(w, 503, "temporarily_unavailable")
+				return
+			}
+			if err = audit.NewWriter(s.pool).Write(r.Context(), audit.Event{AccountID: &account, ActorType: audit.ActorSystem, ActorID: "oauth", Action: "OAUTH_REFRESH_REPLAY_REVOKED", ResourceType: "gateway_client", ResourceID: gatewayClient}); err != nil {
+				fail(w, 503, "temporarily_unavailable")
+				return
+			}
+			fail(w, 400, "invalid_grant")
+			return
+		}
+		if expired {
 			fail(w, 400, "invalid_grant")
 			return
 		}
@@ -520,14 +583,33 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tokenHash := hash(r.Form.Get("token"))
-	_, err = s.pool.Exec(r.Context(), `UPDATE oauth_refresh_tokens SET revoked_at=NOW() WHERE token_hash=$1 AND client_id=$2`, tokenHash, c.ID)
+	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
-		fail(w, 500, "server_error")
+		fail(w, 503, "temporarily_unavailable")
 		return
 	}
-	_, err = s.pool.Exec(r.Context(), `UPDATE access_tokens a SET revoked_at=NOW() WHERE a.token_hash=$1 AND a.client_id IN (SELECT gateway_client_id FROM oauth_refresh_tokens WHERE client_id=$2)`, tokenHash, c.ID)
+	defer tx.Rollback(context.Background())
+	var account, grant string
+	err = tx.QueryRow(r.Context(), `SELECT account_id::text,gateway_client_id::text FROM oauth_refresh_tokens WHERE token_hash=$1 AND client_id=$2
+		UNION SELECT a.account_id::text,a.client_id::text FROM access_tokens a WHERE a.token_hash=$1 AND EXISTS (SELECT 1 FROM oauth_refresh_tokens rt WHERE rt.client_id=$2 AND rt.gateway_client_id=a.client_id AND rt.account_id=a.account_id) LIMIT 1`, tokenHash, c.ID).Scan(&account, &grant)
+	if errors.Is(err, pgx.ErrNoRows) {
+		jsonResponse(w, 200, map[string]any{})
+		return
+	}
 	if err != nil {
-		fail(w, 500, "server_error")
+		fail(w, 503, "temporarily_unavailable")
+		return
+	}
+	if access.LockGrant(r.Context(), tx, account, grant) != nil || access.RevokeGrant(r.Context(), tx, account, grant) != nil {
+		fail(w, 503, "temporarily_unavailable")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		fail(w, 503, "temporarily_unavailable")
+		return
+	}
+	if err = audit.NewWriter(s.pool).Write(r.Context(), audit.Event{AccountID: &account, ActorType: audit.ActorSystem, ActorID: "oauth", Action: "OAUTH_GRANT_REVOKED", ResourceType: "gateway_client", ResourceID: grant}); err != nil {
+		fail(w, 503, "temporarily_unavailable")
 		return
 	}
 	jsonResponse(w, 200, map[string]any{})
